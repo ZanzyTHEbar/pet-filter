@@ -19,6 +19,7 @@ use log::{info, warn, error};
 
 use crate::app::events::AppEvent;
 use crate::app::ports::EventSink;
+use super::utils::is_printable_ascii;
 
 // ───────────────────────────────────────────────────────────────
 // Port trait
@@ -30,6 +31,8 @@ pub enum ConnectivityError {
     InvalidSsid,
     InvalidPassword,
     ConnectionFailed,
+    /// Authentication rejected by the AP (wrong password, MAC filter, etc.).
+    AuthFailed,
     AlreadyConnected,
 }
 
@@ -40,6 +43,7 @@ impl fmt::Display for ConnectivityError {
             Self::InvalidSsid => write!(f, "SSID invalid (must be 1-32 printable ASCII bytes)"),
             Self::InvalidPassword => write!(f, "password invalid (must be 8-64 bytes for WPA2, or empty for open)"),
             Self::ConnectionFailed => write!(f, "WiFi connection failed"),
+            Self::AuthFailed => write!(f, "WiFi authentication failed (wrong password or AP rejection)"),
             Self::AlreadyConnected => write!(f, "already connected to AP"),
         }
     }
@@ -73,9 +77,7 @@ const MAX_BACKOFF_SECS: u32 = 60;
 // Validation
 // ───────────────────────────────────────────────────────────────
 
-fn is_printable_ascii(s: &str) -> bool {
-    s.bytes().all(|b| (0x20..=0x7E).contains(&b))
-}
+// is_printable_ascii is provided by super::utils
 
 fn validate_ssid(ssid: &str) -> Result<(), ConnectivityError> {
     if ssid.is_empty() || ssid.len() > 32 {
@@ -107,6 +109,9 @@ pub struct WifiAdapter {
     /// Simulation: counts platform_connect() calls for deterministic failures.
     #[cfg(not(target_os = "espidf"))]
     sim_connect_counter: u32,
+    /// Simulation: poll ticks while connected; triggers periodic drop.
+    #[cfg(not(target_os = "espidf"))]
+    sim_connected_ticks: u32,
     password: heapless::String<64>,
     backoff_secs: u32,
     last_rssi: Option<i8>,
@@ -119,6 +124,8 @@ impl WifiAdapter {
             ssid: heapless::String::new(),
             #[cfg(not(target_os = "espidf"))]
             sim_connect_counter: 0,
+            #[cfg(not(target_os = "espidf"))]
+            sim_connected_ticks: 0,
             password: heapless::String::new(),
             backoff_secs: 2,
             last_rssi: None,
@@ -190,6 +197,19 @@ impl WifiAdapter {
     #[cfg(not(target_os = "espidf"))]
     fn platform_is_connected(&self) -> bool {
         self.state == WifiState::Connected
+    }
+
+    /// Advance the connected-tick counter and spontaneously drop every ~120 ticks
+    /// to exercise the reconnect path in integration testing.
+    #[cfg(not(target_os = "espidf"))]
+    fn sim_advance_tick(&mut self) -> bool {
+        self.sim_connected_ticks = self.sim_connected_ticks.wrapping_add(1);
+        // Drop once every ~120 poll ticks to simulate AP roam/interference.
+        if self.sim_connected_ticks % 120 == 119 {
+            warn!("WiFi(sim): simulated spontaneous disconnect at tick {}", self.sim_connected_ticks);
+            return false; // signal: disconnect
+        }
+        true
     }
 
     #[cfg(target_os = "espidf")]
@@ -274,10 +294,16 @@ impl ConnectivityPort for WifiAdapter {
                 }
             }
             WifiState::Connected => {
-                if !self.platform_is_connected() {
+                #[cfg(not(target_os = "espidf"))]
+                let still_up = self.sim_advance_tick();
+                #[cfg(target_os = "espidf")]
+                let still_up = self.platform_is_connected();
+                if !still_up {
                     warn!("WiFi: connection lost, entering reconnect");
                     self.state = WifiState::Reconnecting { attempt: 0 };
                     self.last_rssi = None;
+                    #[cfg(not(target_os = "espidf"))]
+                    { self.sim_connected_ticks = 0; }
                 } else {
                     self.last_rssi = self.platform_rssi();
                 }

@@ -121,6 +121,42 @@ extern "C" {
     static mut ulp_stop_flag: u32;
 }
 
+// ── ULP variable accessors (ESP-IDF only) ────────────────────
+//
+// Each accessor documents the invariant that allows its use.
+// All writes occur before ulp_riscv_run() or after stop_ulp_monitor(),
+// so the main CPU and ULP never write the same field concurrently.
+
+/// Read the last NH3 ADC reading captured by the ULP.
+/// SAFETY: Called only after stop_ulp_monitor(); ULP is halted.
+#[cfg(target_os = "espidf")]
+unsafe fn ulp_read_nh3_last() -> u32 { unsafe { ulp_nh3_last_reading } }
+
+/// Read the consecutive above-threshold count from the ULP.
+/// SAFETY: Same as `ulp_read_nh3_last()`.
+#[cfg(target_os = "espidf")]
+unsafe fn ulp_read_above_count() -> u32 { unsafe { ulp_nh3_above_count } }
+
+/// Read the ULP cycle counter.
+/// SAFETY: Same as `ulp_read_nh3_last()`.
+#[cfg(target_os = "espidf")]
+unsafe fn ulp_read_cycle_count() -> u32 { unsafe { ulp_cycle_count } }
+
+/// Write the NH3 ADC threshold that triggers a ULP wake.
+/// SAFETY: Called before ulp_riscv_run(); ULP has not started yet.
+#[cfg(target_os = "espidf")]
+unsafe fn ulp_write_threshold(val: u32) { unsafe { ulp_nh3_threshold_adc = val; } }
+
+/// Write the consecutive-readings confirm count.
+/// SAFETY: Same as `ulp_write_threshold()`.
+#[cfg(target_os = "espidf")]
+unsafe fn ulp_write_confirm_count(val: u32) { unsafe { ulp_nh3_confirm_count = val; } }
+
+/// Set the stop flag to signal the ULP to halt.
+/// SAFETY: Written before reading shared fields; read by ULP in its loop.
+#[cfg(target_os = "espidf")]
+unsafe fn ulp_write_stop_flag(val: u32) { unsafe { ulp_stop_flag = val; } }
+
 // ── Power modes ───────────────────────────────────────────────
 
 /// System power mode.
@@ -264,9 +300,9 @@ impl PowerManager {
         self.ulp_state.stop_flag = 0;
 
         unsafe {
-            ulp_nh3_threshold_adc = threshold_adc;
-            ulp_nh3_confirm_count = confirm_count;
-            ulp_stop_flag = 0;
+            ulp_write_threshold(threshold_adc);
+            ulp_write_confirm_count(confirm_count);
+            ulp_write_stop_flag(0);
             esp_idf_sys::ulp_riscv_run();
         }
 
@@ -300,7 +336,7 @@ impl PowerManager {
         self.ulp_state.stop_flag = 1;
 
         unsafe {
-            ulp_stop_flag = 1;
+            ulp_write_stop_flag(1);
         }
 
         info!("ULP NH3 monitor stop requested");
@@ -321,9 +357,9 @@ impl PowerManager {
     #[cfg(target_os = "espidf")]
     pub fn read_ulp_state(&mut self) -> &UlpSharedState {
         unsafe {
-            self.ulp_state.nh3_last_reading = ulp_nh3_last_reading;
-            self.ulp_state.nh3_above_count = ulp_nh3_above_count;
-            self.ulp_state.cycle_count = ulp_cycle_count;
+            self.ulp_state.nh3_last_reading = ulp_read_nh3_last();
+            self.ulp_state.nh3_above_count = ulp_read_above_count();
+            self.ulp_state.cycle_count = ulp_read_cycle_count();
         }
 
         &self.ulp_state

@@ -157,11 +157,8 @@ fn main() -> Result<()> {
     }
 
     // ── 4. ULP lifecycle ──────────────────────────────────────
-    if wake_reason == WakeReason::PowerOn {
-        power_mgr
-            .load_ulp_program()
-            .unwrap_or_else(|e| warn!("ULP: {}", e));
-    }
+    // load_ulp_program() was already called in the PowerOn match arm above;
+    // calling it again here would double-load the binary and reset ULP state.
     power_mgr.stop_ulp_monitor();
 
     // ── 5. Construct adapters ─────────────────────────────────

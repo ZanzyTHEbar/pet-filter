@@ -19,6 +19,15 @@ static mut SENSOR_TIMER: esp_timer_handle_t = core::ptr::null_mut();
 #[cfg(target_os = "espidf")]
 static mut CONTROL_TIMER: esp_timer_handle_t = core::ptr::null_mut();
 
+/// SAFETY: SENSOR_TIMER is written once in `start_timers()` before any
+/// timer callbacks fire.  Only called from the single main task.
+#[cfg(target_os = "espidf")]
+unsafe fn sensor_timer() -> esp_timer_handle_t { unsafe { SENSOR_TIMER } }
+
+/// SAFETY: Same invariants as `sensor_timer()`.
+#[cfg(target_os = "espidf")]
+unsafe fn control_timer() -> esp_timer_handle_t { unsafe { CONTROL_TIMER } }
+
 #[cfg(target_os = "espidf")]
 unsafe extern "C" fn sensor_tick_cb(_arg: *mut core::ffi::c_void) {
     push_event(Event::SensorReadTick);
@@ -92,12 +101,11 @@ pub fn stop_timers() {
     // SAFETY: SENSOR_TIMER/CONTROL_TIMER are valid handles if start_timers()
     // succeeded; null-check prevents double-free.
     unsafe {
-        if !SENSOR_TIMER.is_null() {
-            esp_timer_stop(SENSOR_TIMER);
-        }
-        if !CONTROL_TIMER.is_null() {
-            esp_timer_stop(CONTROL_TIMER);
-        }
+        // SAFETY: sensor_timer()/control_timer() contract — main task only.
+        let st = sensor_timer();
+        if !st.is_null() { esp_timer_stop(st); }
+        let ct = control_timer();
+        if !ct.is_null() { esp_timer_stop(ct); }
     }
 }
 

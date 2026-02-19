@@ -85,13 +85,27 @@ pub enum Event {
 
 static EVENT_HEAD: AtomicU8 = AtomicU8::new(0);
 static EVENT_TAIL: AtomicU8 = AtomicU8::new(0);
-// SAFETY: EVENT_BUFFER is accessed exclusively through the SPSC queue
-// (heapless::spsc::Queue split into producer/consumer halves).
-// Producer (push_event): ISR / timer-task context — one writer.
-// Consumer (drain_events): main-loop task — one reader.
-// No concurrent mutable access is possible; the atomics inside Queue
-// enforce the SPSC discipline.
 static mut EVENT_BUFFER: [u8; EVENT_QUEUE_CAP] = [0; EVENT_QUEUE_CAP];
+
+/// Write one byte into the event ring buffer at `slot`.
+///
+/// # Safety
+/// The caller must be the sole producer (ISR / timer-task context).
+/// `slot` must be `< EVENT_QUEUE_CAP`.  SPSC discipline guarantees that
+/// the consumer is not reading this slot simultaneously.
+unsafe fn event_buffer_write(slot: usize, val: u8) {
+    unsafe { EVENT_BUFFER[slot] = val; }
+}
+
+/// Read one byte from the event ring buffer at `slot`.
+///
+/// # Safety
+/// The caller must be the sole consumer (main-loop task).
+/// `slot` must be `< EVENT_QUEUE_CAP`.  SPSC discipline guarantees that
+/// the producer is not writing this slot simultaneously.
+unsafe fn event_buffer_read(slot: usize) -> u8 {
+    unsafe { EVENT_BUFFER[slot] }
+}
 
 /// Push an event into the queue.
 /// Safe to call from ISR context (lock-free).
@@ -105,11 +119,10 @@ pub fn push_event(event: Event) -> bool {
         return false; // Queue full — drop event.
     }
 
-    // SAFETY: Only one producer (ISR context is single-threaded on each
-    // core, and we use Relaxed ordering which is sufficient for SPSC).
-    unsafe {
-        EVENT_BUFFER[head as usize] = event as u8;
-    }
+    // SAFETY: push_event is the sole producer (ISR / timer-task context).
+    // event_buffer_write() accesses EVENT_BUFFER exclusively at the head slot
+    // while the consumer reads at the tail slot — SPSC discipline holds.
+    unsafe { event_buffer_write(head as usize, event as u8); }
 
     EVENT_HEAD.store(next_head, Ordering::Release);
     true
@@ -126,7 +139,8 @@ pub fn pop_event() -> Option<Event> {
         return None; // Empty.
     }
 
-    let raw = unsafe { EVENT_BUFFER[tail as usize] };
+    // SAFETY: pop_event is the sole consumer (main-loop task).
+    let raw = unsafe { event_buffer_read(tail as usize) };
     EVENT_TAIL.store((tail + 1) % EVENT_QUEUE_CAP as u8, Ordering::Release);
 
     event_from_u8(raw)

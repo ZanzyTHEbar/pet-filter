@@ -3,7 +3,9 @@
 //! Simple proportional-integral-derivative controller
 //! for maintaining target water flow rate through the venturi.
 
-/// PID controller
+/// PID controller for venturi pump flow-rate regulation.
+/// Not yet wired into the control loop (planned for P1 PID phase).
+#[allow(dead_code)]
 pub struct PidController {
     kp: f32,
     ki: f32,
@@ -15,6 +17,7 @@ pub struct PidController {
     output_max: f32,
 }
 
+#[allow(dead_code)]
 impl PidController {
     pub fn new(kp: f32, ki: f32, kd: f32, setpoint: f32) -> Self {
         Self {

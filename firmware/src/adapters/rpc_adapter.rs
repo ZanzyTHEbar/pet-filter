@@ -15,6 +15,9 @@ use crate::rpc::fb;
 use crate::rpc::transport::Transport;
 
 /// Adapter that bridges AppEvents to the RPC transport.
+/// Bridges AppEvents to the RPC transport for push-direction events.
+/// Not yet wired into main.rs (LogEventSink used for now).
+#[allow(dead_code)]
 pub struct RpcEventSink<T: Transport> {
     transport: Option<T>,
     write_buf: [u8; 256],
@@ -22,6 +25,7 @@ pub struct RpcEventSink<T: Transport> {
     msg_id: u32,
 }
 
+#[allow(dead_code)]
 impl<T: Transport> RpcEventSink<T> {
     pub fn new() -> Self {
         Self {

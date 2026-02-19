@@ -60,6 +60,14 @@ pub fn init_peripherals() -> Result<(), HwInitError> {
 #[cfg(target_os = "espidf")]
 static mut ADC1_HANDLE: adc_oneshot_unit_handle_t = core::ptr::null_mut();
 
+/// SAFETY: Must be called only from the single-threaded init path or the
+/// main-loop ADC read path.  No concurrent access is possible because
+/// `init_adc()` completes before the event loop starts.
+#[cfg(target_os = "espidf")]
+unsafe fn adc1_handle() -> adc_oneshot_unit_handle_t {
+    unsafe { ADC1_HANDLE }
+}
+
 #[cfg(target_os = "espidf")]
 unsafe fn init_adc() -> Result<(), HwInitError> {
     let init_cfg = adc_oneshot_unit_init_cfg_t {
@@ -76,10 +84,10 @@ unsafe fn init_adc() -> Result<(), HwInitError> {
         bitwidth: adc_bitwidth_t_ADC_BITWIDTH_12,
     };
 
-    let ret = unsafe { adc_oneshot_config_channel(ADC1_HANDLE, adc_channel_t_ADC_CHANNEL_4, &chan_cfg) };
+    let ret = unsafe { adc_oneshot_config_channel(adc1_handle(), adc_channel_t_ADC_CHANNEL_4, &chan_cfg) };
     if ret != ESP_OK as i32 { return Err(HwInitError::AdcInitFailed(ret)); }
 
-    let ret = unsafe { adc_oneshot_config_channel(ADC1_HANDLE, adc_channel_t_ADC_CHANNEL_8, &chan_cfg) };
+    let ret = unsafe { adc_oneshot_config_channel(adc1_handle(), adc_channel_t_ADC_CHANNEL_8, &chan_cfg) };
     if ret != ESP_OK as i32 { return Err(HwInitError::AdcInitFailed(ret)); }
 
     info!("hw_init: ADC1 configured (CH4=NH3, CH8=temp)");
@@ -91,7 +99,8 @@ pub fn adc1_read(channel: u32) -> u16 {
     let mut raw: i32 = 0;
     // SAFETY: ADC1_HANDLE is written once during init_adc() before this
     // function is called; single-threaded main-loop access guaranteed.
-    let ret = unsafe { adc_oneshot_read(ADC1_HANDLE, channel, &mut raw) };
+        // SAFETY: adc1_handle() contract — single-threaded main-loop access only.
+    let ret = unsafe { adc_oneshot_read(adc1_handle(), channel, &mut raw) };
     if ret != ESP_OK as i32 {
         return 0;
     }
@@ -289,6 +298,8 @@ pub const ADC1_CH_TEMP: u32 = 8;
 use crate::events::{push_event, Event};
 #[cfg(target_os = "espidf")]
 use crate::sensors::flow::flow_isr_handler;
+#[cfg(target_os = "espidf")]
+use crate::drivers::button::button_isr_handler;
 
 #[cfg(target_os = "espidf")]
 unsafe extern "C" fn flow_gpio_isr(_arg: *mut core::ffi::c_void) {
@@ -296,7 +307,18 @@ unsafe extern "C" fn flow_gpio_isr(_arg: *mut core::ffi::c_void) {
 }
 
 #[cfg(target_os = "espidf")]
+unsafe extern "C" fn button_gpio_isr(_arg: *mut core::ffi::c_void) {
+    // SAFETY: esp_timer_get_time is a RTC counter read; safe in ISR context.
+    let now_ms = (unsafe { esp_idf_svc::sys::esp_timer_get_time() } / 1_000) as u32;
+    button_isr_handler(now_ms);
+}
+
+#[cfg(target_os = "espidf")]
 unsafe extern "C" fn interlock_gpio_isr(_arg: *mut core::ffi::c_void) {
+    // LOW = closed (magnet present = safe), HIGH = open.
+    // SAFETY: gpio_get_level is a register read; safe in ISR context.
+    let closed = unsafe { gpio_get_level(pins::UVC_INTERLOCK_GPIO) } == 0;
+    crate::sensors::set_interlock_from_isr(closed);
     push_event(Event::InterlockChanged);
 }
 
@@ -333,6 +355,13 @@ pub fn init_isr_service() -> Result<(), HwInitError> {
         gpio_isr_handler_add(pins::UVC_INTERLOCK_GPIO, Some(interlock_gpio_isr), core::ptr::null_mut());
         gpio_intr_enable(pins::UVC_INTERLOCK_GPIO);
 
+        // Seed the interlock atomic with the current GPIO level so the
+        // safety supervisor has a valid reading before the first edge fires.
+        {
+            let closed = gpio_get_level(pins::UVC_INTERLOCK_GPIO) == 0;
+            crate::sensors::set_interlock_from_isr(closed);
+        }
+
         // Water level A: falling edge (tank going empty)
         gpio_set_intr_type(pins::WATER_LEVEL_A_GPIO, gpio_int_type_t_GPIO_INTR_NEGEDGE);
         gpio_isr_handler_add(pins::WATER_LEVEL_A_GPIO, Some(water_level_a_isr), core::ptr::null_mut());
@@ -343,7 +372,12 @@ pub fn init_isr_service() -> Result<(), HwInitError> {
         gpio_isr_handler_add(pins::WATER_LEVEL_B_GPIO, Some(water_level_b_isr), core::ptr::null_mut());
         gpio_intr_enable(pins::WATER_LEVEL_B_GPIO);
 
-        info!("hw_init: ISR service installed (flow, interlock, water_level×2)");
+        // Button: falling edge (active-low with pull-up already configured)
+        gpio_set_intr_type(pins::BUTTON_GPIO, gpio_int_type_t_GPIO_INTR_NEGEDGE);
+        gpio_isr_handler_add(pins::BUTTON_GPIO, Some(button_gpio_isr), core::ptr::null_mut());
+        gpio_intr_enable(pins::BUTTON_GPIO);
+
+        info!("hw_init: ISR service installed (flow, interlock, water_level×2, button)");
     }
     Ok(())
 }

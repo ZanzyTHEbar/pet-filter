@@ -24,3 +24,4 @@ pub mod tls_transport;
 pub mod wifi;
 pub mod mdns;
 pub mod device_id;
+pub(super) mod utils;

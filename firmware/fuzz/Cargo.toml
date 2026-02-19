@@ -1,0 +1,36 @@
+[package]
+name = "petfilter-fuzz"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.petfilter]
+path = ".."
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_frame_decoder"
+path = "fuzz_targets/fuzz_frame_decoder.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_auth_psk"
+path = "fuzz_targets/fuzz_auth_psk.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_crash_log"
+path = "fuzz_targets/fuzz_crash_log.rs"
+test = false
+doc = false

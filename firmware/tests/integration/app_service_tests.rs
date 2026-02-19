@@ -4,8 +4,7 @@
 //! chain from an incoming RPC command down to an actuator call works
 //! correctly without any real hardware.
 
-mod mock_hw;
-use mock_hw::{LogSink, MockHardware, MockNvs};
+use crate::mock_hw::{LogSink, MockHardware, MockNvs};
 
 use petfilter::app::commands::AppCommand;
 use petfilter::app::service::AppService;
@@ -128,7 +127,7 @@ fn force_error_state_calls_all_off() {
     assert_eq!(app.state(), StateId::Error, "FSM should be in Error state");
     // AllOff should have been issued when entering Error state.
     assert!(
-        hw.calls.iter().any(|c| matches!(c, mock_hw::ActuatorCall::AllOff)),
+        hw.calls.iter().any(|c| matches!(c, crate::mock_hw::ActuatorCall::AllOff)),
         "AllOff must be issued on FSM Error entry"
     );
 }

@@ -60,8 +60,24 @@ impl ActuatorPort for MockHardware {
         self.calls.push(ActuatorCall::SetPump { duty, forward });
     }
 
+    fn stop_pump(&mut self) {
+        self.calls.push(ActuatorCall::SetPump { duty: 0, forward: true });
+    }
+
     fn enable_uvc(&mut self, duty: u8) {
         self.calls.push(ActuatorCall::EnableUvc { duty });
+    }
+
+    fn disable_uvc(&mut self) {
+        self.calls.push(ActuatorCall::EnableUvc { duty: 0 });
+    }
+
+    fn fault_shutdown_uvc(&mut self, _reason: &'static str) {
+        self.calls.push(ActuatorCall::EnableUvc { duty: 0 });
+    }
+
+    fn is_uvc_on(&self) -> bool {
+        self.uvc_on()
     }
 
     fn set_led(&mut self, r: u8, g: u8, b: u8) {
@@ -70,6 +86,29 @@ impl ActuatorPort for MockHardware {
 
     fn all_off(&mut self) {
         self.calls.push(ActuatorCall::AllOff);
+    }
+}
+
+// ── SensorPort for MockHardware ──────────────────────────────
+
+impl petfilter::app::ports::SensorPort for MockHardware {
+    fn read_all(&mut self, _elapsed_secs: f32) -> petfilter::fsm::context::SensorSnapshot {
+        petfilter::fsm::context::SensorSnapshot {
+            nh3_ppm: 0.0,
+            nh3_avg_ppm: 0.0,
+            nh3_raw: 0,
+            flow_ml_per_min: 100.0,
+            flow_detected: true,
+            tank_a_ok: true,
+            tank_b_ok: true,
+            temperature_c: 25.0,
+            over_temperature: false,
+            uvc_interlock_closed: true,
+        }
+    }
+
+    fn read_ammonia_fast(&mut self) -> f32 {
+        0.0
     }
 }
 
@@ -149,7 +188,7 @@ impl Default for LogSink {
 }
 
 impl EventSink for LogSink {
-    fn emit(&mut self, event: &str) {
-        self.events.push(event.to_string());
+    fn emit(&mut self, event: &petfilter::app::events::AppEvent) {
+        self.events.push(format!("{:?}", event));
     }
 }

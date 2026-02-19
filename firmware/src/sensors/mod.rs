@@ -8,12 +8,25 @@ pub mod flow;
 pub mod temperature;
 pub mod water_level;
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use crate::error::{Error, SensorError};
 use crate::fsm::context::SensorSnapshot;
 use ammonia::AmmoniaSensor;
 use flow::FlowSensor;
 use temperature::TemperatureSensor;
 use water_level::WaterLevelSensor;
+
+/// Atomic cache of the UVC interlock state, written from the GPIO ISR or
+/// from `set_interlock_from_isr()` at boot.  `true` = interlock closed
+/// (lid magnet present = safe); `false` = open (fault condition).
+static INTERLOCK_CLOSED_ATOMIC: AtomicBool = AtomicBool::new(false);
+
+/// Update the interlock state from an ISR or boot-time GPIO read.
+/// Lock-free — safe to call from interrupt context.
+pub fn set_interlock_from_isr(closed: bool) {
+    INTERLOCK_CLOSED_ATOMIC.store(closed, Ordering::Release);
+}
 
 /// Aggregates all sensor drivers and produces a unified snapshot.
 pub struct SensorHub {
@@ -56,12 +69,10 @@ impl SensorHub {
         let (level_a, level_b) = self.water_level.read();
         let temp = self.temperature.read();
 
-        // Read the interlock GPIO directly (simple digital input).
-        // LOW = closed (magnet present), HIGH = open.
-        // NOTE: In real HW init we set up a PinDriver; for now we
-        // store the last-known value set externally.
-        // In the real build this would be:
-        //   self.interlock_closed = self.interlock_pin.is_low();
+        // Read the interlock state from the ISR-maintained atomic.
+        // set_interlock_from_isr() is called on every GPIO edge and once
+        // at boot in init_isr_service() to seed the initial level.
+        self.interlock_closed = INTERLOCK_CLOSED_ATOMIC.load(Ordering::Acquire);
 
         SensorSnapshot {
             nh3_ppm: nh3.ppm,

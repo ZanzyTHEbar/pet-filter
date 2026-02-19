@@ -170,3 +170,23 @@ fn force_error_state_issues_all_off() {
         "AllOff must be issued when FSM enters Error state"
     );
 }
+
+// ── QA-7f: Safety fault → Error → clear → Idle ───────────────
+
+#[test]
+fn safety_fault_error_then_clear_returns_to_idle() {
+    let (mut app, mut hw, mut sink) = make_app();
+
+    // Force FSM into Error state (simulates safety fault).
+    app.handle_command(AppCommand::ForceState(StateId::Error), &mut hw, &mut sink);
+    assert_eq!(app.state(), StateId::Error, "FSM should be in Error state");
+    assert!(
+        hw.calls.iter().any(|c| matches!(c, ActCall::AllOff)),
+        "AllOff must be issued on Error entry"
+    );
+
+    // Clear the error by forcing Idle (simulates fault-clear RPC).
+    hw.calls.clear();
+    app.handle_command(AppCommand::ForceState(StateId::Idle), &mut hw, &mut sink);
+    assert_eq!(app.state(), StateId::Idle, "FSM should return to Idle after fault clear");
+}

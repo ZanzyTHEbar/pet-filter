@@ -21,6 +21,7 @@
 
 use core::fmt;
 use log::{info, warn, error};
+use super::utils::is_printable_ascii;
 
 // ───────────────────────────────────────────────────────────────
 // Constants
@@ -96,9 +97,7 @@ pub enum BleState {
 // Validation helpers
 // ───────────────────────────────────────────────────────────────
 
-fn is_printable_ascii(s: &str) -> bool {
-    s.bytes().all(|b| (0x20..=0x7E).contains(&b))
-}
+// is_printable_ascii is provided by super::utils
 
 fn sanitize_ble_string(raw: &[u8], max_len: usize) -> Result<&str, ProvisioningError> {
     if raw.len() > max_len {
@@ -147,6 +146,13 @@ pub struct BleAdapter {
     pending_psk: Option<[u8; PSK_LEN]>,
     status_buf: heapless::String<64>,
     device_name: heapless::String<24>,
+    /// Simulation: tracks provisioning write sequence (0=idle, 1=ssid, 2=pass, 3=psk).
+    /// Used to enforce correct SSID→Password→PSK order and detect timeouts.
+    #[cfg(not(target_os = "espidf"))]
+    sim_provision_step: u8,
+    /// Simulation: ticks since last write; pairing timeout if > 60.
+    #[cfg(not(target_os = "espidf"))]
+    sim_pairing_ticks: u32,
 }
 
 impl BleAdapter {
@@ -159,6 +165,8 @@ impl BleAdapter {
             status_buf: heapless::String::new(),
             #[cfg(not(target_os = "espidf"))]
             sim_provision_step: 0,
+            #[cfg(not(target_os = "espidf"))]
+            sim_pairing_ticks: 0,
             device_name,
         }
     }
@@ -173,23 +181,39 @@ impl BleAdapter {
         let mut ssid = heapless::String::<32>::new();
         ssid.push_str(s).map_err(|_| ProvisioningError::InvalidSsid)?;
         self.pending_ssid = Some(ssid);
+        #[cfg(not(target_os = "espidf"))]
+        { self.sim_provision_step = 1; self.sim_pairing_ticks = 0; }
         info!("BLE: SSID written (len={})", s.len());
         Ok(())
     }
 
     pub fn on_password_write(&mut self, raw: &[u8]) -> Result<(), ProvisioningError> {
+        #[cfg(not(target_os = "espidf"))]
+        if self.sim_provision_step != 1 {
+            warn!("BLE(sim): out-of-order write — password before SSID (step={})", self.sim_provision_step);
+            return Err(ProvisioningError::InvalidPassword);
+        }
         let s = sanitize_ble_string(raw, MAX_PASSWORD_LEN)?;
         validate_password(s)?;
         let mut pw = heapless::String::<64>::new();
         pw.push_str(s).map_err(|_| ProvisioningError::InvalidPassword)?;
         self.pending_password = Some(pw);
+        #[cfg(not(target_os = "espidf"))]
+        { self.sim_provision_step = 2; }
         info!("BLE: password written (len={})", s.len());
         Ok(())
     }
 
     pub fn on_psk_write(&mut self, raw: &[u8]) -> Result<(), ProvisioningError> {
+        #[cfg(not(target_os = "espidf"))]
+        if self.sim_provision_step != 2 {
+            warn!("BLE(sim): out-of-order write — PSK before password (step={})", self.sim_provision_step);
+            return Err(ProvisioningError::InvalidPsk);
+        }
         let psk = validate_psk(raw)?;
         self.pending_psk = Some(psk);
+        #[cfg(not(target_os = "espidf"))]
+        { self.sim_provision_step = 3; }
         info!("BLE: PSK pairing key written");
         Ok(())
     }
@@ -201,6 +225,27 @@ impl BleAdapter {
     pub fn on_central_connected(&mut self) {
         info!("BLE: central connected");
         self.state = BleState::Connected;
+        #[cfg(not(target_os = "espidf"))]
+        { self.sim_provision_step = 0; self.sim_pairing_ticks = 0; }
+    }
+
+    /// Advance the pairing timeout counter (call from main loop tick).
+    /// Returns `true` if the pairing session timed out (>60 ticks without writing SSID).
+    #[cfg(not(target_os = "espidf"))]
+    pub fn sim_tick_pairing_timeout(&mut self) -> bool {
+        if self.state != BleState::Connected || self.sim_provision_step == 0 {
+            return false;
+        }
+        self.sim_pairing_ticks = self.sim_pairing_ticks.wrapping_add(1);
+        if self.sim_pairing_ticks > 60 {
+            warn!("BLE(sim): pairing timeout — no credentials after 60 ticks");
+            self.sim_provision_step = 0;
+            self.sim_pairing_ticks = 0;
+            self.pending_ssid = None;
+            self.pending_password = None;
+            return true;
+        }
+        false
     }
 
     pub fn on_central_disconnected(&mut self) {
@@ -286,6 +331,8 @@ impl ProvisioningPort for BleAdapter {
         self.pending_ssid = None;
         self.pending_password = None;
         self.pending_psk = None;
+        #[cfg(not(target_os = "espidf"))]
+        { self.sim_provision_step = 0; self.sim_pairing_ticks = 0; }
         info!("BLE: stopped");
     }
 
