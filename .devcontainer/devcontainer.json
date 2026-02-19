@@ -1,0 +1,59 @@
+{
+  "name": "PetFilter ESP32-S3 Firmware",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+  "workspaceFolder": "/workspace/firmware",
+  "containerUser": "esp",
+  "remoteEnv": {
+    "LIBCLANG_PATH": "/home/esp/.rustup/toolchains/esp/xtensa-esp32-elf-clang/esp-20.1.1_20250829/esp-clang/lib",
+    "ESP_IDF_TOOLS_INSTALL_DIR": "global"
+  },
+  "mounts": [
+    "source=petfilter-cargo-registry,target=/home/esp/.cargo/registry,type=volume",
+    "source=petfilter-cargo-git,target=/home/esp/.cargo/git,type=volume",
+    "source=petfilter-esp-idf,target=/home/esp/.espressif,type=volume",
+    "source=petfilter-target,target=/workspace/firmware/target,type=volume"
+  ],
+  "forwardPorts": [
+    9012,
+    4242,
+    8000
+  ],
+  "portsAttributes": {
+    "9012": { "label": "Wokwi GDB", "onAutoForward": "silent" },
+    "4242": { "label": "RPC TLS", "onAutoForward": "silent" },
+    "8000": { "label": "web-flash", "onAutoForward": "notify" }
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.formatOnSaveMode": "modifications",
+        "rust-analyzer.check.command": "clippy",
+        "rust-analyzer.cargo.target": "xtensa-esp32s3-espidf",
+        "rust-analyzer.cargo.buildScripts.enable": true,
+        "files.watcherExclude": {
+          "**/target/**": true,
+          "**/.espressif/**": true
+        },
+        "[rust]": {
+          "editor.defaultFormatter": "rust-lang.rust-analyzer"
+        }
+      },
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "serayuzgur.crates",
+        "mutantdino.resourcemonitor",
+        "vadimcn.vscode-lldb",
+        "Wokwi.wokwi-vscode"
+      ]
+    }
+  },
+  "postStartCommand": "sudo /bin/chown -R esp:esp /workspace/firmware/target && sudo /bin/chown -R esp:esp /home/esp/.espressif && sudo /bin/chown -R esp:esp /home/esp/.cargo",
+  "postCreateCommand": "rustc --version && cargo --version && flatc --version && echo 'PetFilter devcontainer ready'",
+  "shutdownAction": "stopContainer"
+}

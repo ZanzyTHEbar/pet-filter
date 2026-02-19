@@ -1,0 +1,77 @@
+[package]
+name = "petfilter"
+version = "0.2.0"
+edition = "2021"
+authors = ["PetFilter Engineering"]
+description = "PetFilter venturi air scrubber firmware for ESP32-S3"
+license = "Proprietary"
+rust-version = "1.77"
+
+
+[lib]
+name = "petfilter"
+path = "src/lib.rs"
+
+[[bin]]
+name = "petfilter"
+path = "src/main.rs"
+
+[lints.rust]
+unused_must_use = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+# Exceptions for embedded development where these are common/acceptable
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+
+[dependencies]
+# ESP-IDF framework bindings
+esp-idf-svc = { version = "0.51", features = ["binstart", "alloc", "experimental"] }
+esp-idf-hal = "0.45"
+esp-idf-sys = { version = "0.36", features = ["binstart"] }
+
+# Embedded HAL traits (hardware abstraction)
+embedded-hal = "1.0"
+
+# Logging
+log = "0.4"
+esp_idf_logger = "0.1"
+
+# Error handling
+anyhow = "1"
+
+# Fixed-capacity collections (no heap)
+heapless = { version = "0.8", features = ["serde"] }
+
+# Serialisation
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+
+# FlatBuffers runtime (matches flatc 25.12.19 codegen)
+flatbuffers = "25.12.19"
+postcard = { version = "1.1.3", features = ["alloc"] }
+
+[dev-dependencies]
+
+[target.'cfg(not(target_os = "espidf"))'.dev-dependencies]
+proptest = "1"
+
+[build-dependencies]
+embuild = "0.33"
+
+[profile.release]
+opt-level = "s"
+lto = true
+debug = false
+strip = "symbols"
+
+[profile.dev]
+debug = true
+opt-level = 1

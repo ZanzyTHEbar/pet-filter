@@ -1,0 +1,23 @@
+# PetFilter KiCad Development Environment
+# Usage:
+#   docker compose run kicad make validate    # Run ERC + DRC
+#   docker compose run kicad make bom         # Generate BOM
+#   docker compose run kicad make gerbers     # Export Gerbers
+#   docker compose run kicad make all         # Full pipeline
+#   docker compose run kicad bash             # Interactive shell
+
+services:
+  kicad:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./hardware/pcb:/workspace/pcb
+      - ./hardware/pcb/output:/workspace/output
+      - ./tools:/workspace/tools
+    working_dir: /workspace/pcb
+    environment:
+      - KIBOT_CONFIG=/workspace/pcb/kibot.yaml
+      - INTERACTIVE=0
+    tty: true
+    stdin_open: true

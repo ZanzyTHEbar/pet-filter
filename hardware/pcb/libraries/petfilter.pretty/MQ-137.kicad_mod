@@ -1,0 +1,85 @@
+(footprint "MQ-137"
+  (version 20231014)
+  (generator "petfilter_libgen")
+  (layer "F.Cu")
+  (descr "MQ-137 Ammonia Gas Sensor, 6-pin TO-5 style, 9mm pin circle")
+  (tags "MQ-137 MQ137 gas-sensor ammonia NH3")
+  (attr through_hole)
+  (fp_text reference "REF**"
+    (at 0 -11)
+    (layer "F.SilkS")
+    (effects (font (size 1 1) (thickness 0.15)))
+    (uuid "b0000001-0000-0000-0000-000000000001")
+  )
+  (fp_text value "MQ-137"
+    (at 0 11)
+    (layer "F.Fab")
+    (effects (font (size 1 1) (thickness 0.15)))
+    (uuid "b0000001-0000-0000-0000-000000000002")
+  )
+  ;; Body outline - circular sensor cap (F.Fab)
+  (fp_circle (center 0 0) (end 9 0)
+    (stroke (width 0.1) (type default)) (fill no) (layer "F.Fab")
+    (uuid "b0000001-0000-0000-0000-000000000003"))
+  ;; Silkscreen circle
+  (fp_circle (center 0 0) (end 9.5 0)
+    (stroke (width 0.12) (type default)) (fill no) (layer "F.SilkS")
+    (uuid "b0000001-0000-0000-0000-000000000004"))
+  ;; Courtyard circle
+  (fp_circle (center 0 0) (end 10.5 0)
+    (stroke (width 0.05) (type default)) (fill no) (layer "F.CrtYd")
+    (uuid "b0000001-0000-0000-0000-000000000005"))
+  ;; Pin 1 marker on silkscreen
+  (fp_line (start 5.5 0) (end 6.5 0)
+    (stroke (width 0.2) (type default)) (layer "F.SilkS")
+    (uuid "b0000001-0000-0000-0000-000000000006"))
+  ;; 6 Through-hole pads on 9mm diameter circle (4.5mm radius)
+  ;; Pin 1: 0 degrees (right) - H+ heater
+  (pad "1" thru_hole circle
+    (at 4.5 0)
+    (size 1.4 1.4)
+    (drill 0.8)
+    (layers "*.Cu" "*.Mask")
+    (uuid "b0000001-0000-0000-0000-000000000010")
+  )
+  ;; Pin 2: 60 degrees - A output
+  (pad "2" thru_hole circle
+    (at 2.25 -3.897)
+    (size 1.4 1.4)
+    (drill 0.8)
+    (layers "*.Cu" "*.Mask")
+    (uuid "b0000001-0000-0000-0000-000000000011")
+  )
+  ;; Pin 3: 120 degrees - H- heater
+  (pad "3" thru_hole circle
+    (at -2.25 -3.897)
+    (size 1.4 1.4)
+    (drill 0.8)
+    (layers "*.Cu" "*.Mask")
+    (uuid "b0000001-0000-0000-0000-000000000012")
+  )
+  ;; Pin 4: 180 degrees (left) - B output
+  (pad "4" thru_hole circle
+    (at -4.5 0)
+    (size 1.4 1.4)
+    (drill 0.8)
+    (layers "*.Cu" "*.Mask")
+    (uuid "b0000001-0000-0000-0000-000000000013")
+  )
+  ;; Pin 5: 240 degrees - H+ heater (connected to pin 1)
+  (pad "5" thru_hole circle
+    (at -2.25 3.897)
+    (size 1.4 1.4)
+    (drill 0.8)
+    (layers "*.Cu" "*.Mask")
+    (uuid "b0000001-0000-0000-0000-000000000014")
+  )
+  ;; Pin 6: 300 degrees - H- heater (connected to pin 3)
+  (pad "6" thru_hole circle
+    (at 2.25 3.897)
+    (size 1.4 1.4)
+    (drill 0.8)
+    (layers "*.Cu" "*.Mask")
+    (uuid "b0000001-0000-0000-0000-000000000015")
+  )
+)

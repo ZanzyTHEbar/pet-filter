@@ -1,0 +1,11 @@
+# Wokwi simulation configuration for PetFilter firmware
+# See: https://docs.wokwi.com/vscode/project-config
+[wokwi]
+version = 1
+# Firmware binary produced by `cargo build --release`
+# Use `espflash save-image` or `idf.py uf2` to generate
+firmware = "target/xtensa-esp32s3-espidf/release/petfilter"
+elf = "target/xtensa-esp32s3-espidf/release/petfilter"
+
+# GDB debugging support
+# gdbServerPort = 3333

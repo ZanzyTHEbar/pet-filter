@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "petfilter")(type "KiCad")(uri "${KIPRJMOD}/libraries/petfilter.kicad_sym")(options "")(descr "PetFilter custom components"))
+)

@@ -1,0 +1,20 @@
+.cursor/
+# KiCad outputs (generated, not tracked)
+hardware/pcb/output/
+
+# KiCad backup files
+*.kicad_sch-bak
+*.kicad_pcb-bak
+*-backups/
+fp-info-cache
+
+# Docker
+.docker/
+
+# Python
+
+__pycache__/
+
+# Rust
+target/
+ulp/build/

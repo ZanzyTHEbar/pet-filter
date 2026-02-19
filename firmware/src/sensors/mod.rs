@@ -1,0 +1,84 @@
+//! Sensor subsystem — individual drivers and the aggregating [`SensorHub`].
+//!
+//! The hub owns every sensor driver and produces a [`SensorSnapshot`] each
+//! tick that gets written into `FsmContext.sensors`.
+
+pub mod ammonia;
+pub mod flow;
+pub mod temperature;
+pub mod water_level;
+
+use crate::error::{Error, SensorError};
+use crate::fsm::context::SensorSnapshot;
+use ammonia::AmmoniaSensor;
+use flow::FlowSensor;
+use temperature::TemperatureSensor;
+use water_level::WaterLevelSensor;
+
+/// Aggregates all sensor drivers and produces a unified snapshot.
+pub struct SensorHub {
+    pub ammonia: AmmoniaSensor,
+    pub flow: FlowSensor,
+    pub water_level: WaterLevelSensor,
+    pub temperature: TemperatureSensor,
+    /// Cached UVC interlock state (read from GPIO).
+    interlock_closed: bool,
+    interlock_gpio: i32,
+}
+
+impl SensorHub {
+    /// Construct a new hub.  Pass in pre-built drivers (built in main
+    /// where peripheral ownership is established).
+    pub fn new(
+        ammonia: AmmoniaSensor,
+        flow: FlowSensor,
+        water_level: WaterLevelSensor,
+        temperature: TemperatureSensor,
+        interlock_gpio: i32,
+    ) -> Self {
+        Self {
+            ammonia,
+            flow,
+            water_level,
+            temperature,
+            interlock_closed: false,
+            interlock_gpio,
+        }
+    }
+
+    /// Read every sensor and return a unified snapshot.
+    ///
+    /// Individual read failures are logged and the previous good value is
+    /// retained — a single flaky sensor must not crash the control loop.
+    pub fn read_all(&mut self, elapsed_secs: f32) -> SensorSnapshot {
+        let nh3 = self.ammonia.read();
+        let flow = self.flow.read(elapsed_secs);
+        let (level_a, level_b) = self.water_level.read();
+        let temp = self.temperature.read();
+
+        // Read the interlock GPIO directly (simple digital input).
+        // LOW = closed (magnet present), HIGH = open.
+        // NOTE: In real HW init we set up a PinDriver; for now we
+        // store the last-known value set externally.
+        // In the real build this would be:
+        //   self.interlock_closed = self.interlock_pin.is_low();
+
+        SensorSnapshot {
+            nh3_ppm: nh3.ppm,
+            nh3_avg_ppm: nh3.avg_ppm,
+            nh3_raw: nh3.raw,
+            flow_ml_per_min: flow.flow_ml_per_min,
+            flow_detected: flow.flow_detected,
+            tank_a_ok: level_a.water_present,
+            tank_b_ok: level_b.water_present,
+            temperature_c: temp.celsius,
+            over_temperature: temp.over_temp,
+            uvc_interlock_closed: self.interlock_closed,
+        }
+    }
+
+    /// Externally set the interlock state (called from main loop GPIO read).
+    pub fn set_interlock(&mut self, closed: bool) {
+        self.interlock_closed = closed;
+    }
+}

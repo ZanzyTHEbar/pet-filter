@@ -1,0 +1,386 @@
+(kicad_symbol_lib
+  (version 20231120)
+  (generator "petfilter_libgen")
+  (generator_version "1.0")
+
+  ;; ============================================================
+  ;; PT4115 - 30V Constant Current LED Driver (SOT-89-5)
+  ;; Datasheet: PowTech PT4115 / PT4115B
+  ;; Package: SOT-89-5 (1.5mm pitch)
+  ;; ============================================================
+  (symbol "PT4115"
+    (pin_names (offset 1.016))
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (property "Reference" "U"
+      (at 0 8.89 0)
+      (effects (font (size 1.27 1.27)))
+    )
+    (property "Value" "PT4115"
+      (at 0 -8.89 0)
+      (effects (font (size 1.27 1.27)))
+    )
+    (property "Footprint" "petfilter:SOT-89-5"
+      (at 0 -11.43 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (property "Datasheet" "https://datasheet.lcsc.com/lcsc/1811081611_PowTech-Shanghai-PT4115_C15425.pdf"
+      (at 0 -13.97 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (property "Description" "30V 1.2A Step-Down Constant Current LED Driver"
+      (at 0 -16.51 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (property "LCSC" "C15425"
+      (at 0 -19.05 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (symbol "PT4115_0_1"
+      (rectangle
+        (start -5.08 7.62)
+        (end 5.08 -7.62)
+        (stroke (width 0.254) (type default))
+        (fill (type background))
+      )
+    )
+    (symbol "PT4115_1_1"
+      ;; VIN - Power input (top)
+      (pin power_in line
+        (at 0 10.16 270)
+        (length 2.54)
+        (name "VIN" (effects (font (size 1.27 1.27))))
+        (number "3" (effects (font (size 1.27 1.27))))
+      )
+      ;; GND - Ground (bottom)
+      (pin power_in line
+        (at 0 -10.16 90)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "2" (effects (font (size 1.27 1.27))))
+      )
+      ;; DIM - PWM dimming input (left)
+      (pin input line
+        (at -7.62 2.54 0)
+        (length 2.54)
+        (name "DIM" (effects (font (size 1.27 1.27))))
+        (number "4" (effects (font (size 1.27 1.27))))
+      )
+      ;; CSN - Current sense (left)
+      (pin input line
+        (at -7.62 -2.54 0)
+        (length 2.54)
+        (name "CSN" (effects (font (size 1.27 1.27))))
+        (number "5" (effects (font (size 1.27 1.27))))
+      )
+      ;; SW - Switch output (right)
+      (pin output line
+        (at 7.62 2.54 180)
+        (length 2.54)
+        (name "SW" (effects (font (size 1.27 1.27))))
+        (number "1" (effects (font (size 1.27 1.27))))
+      )
+    )
+  )
+
+  ;; ============================================================
+  ;; MP1584EN - 3A Step-Down Converter (SOIC-8)
+  ;; Datasheet: Monolithic Power Systems MP1584EN
+  ;; Package: SOIC-8 (1.27mm pitch)
+  ;; ============================================================
+  (symbol "MP1584EN"
+    (pin_names (offset 1.016))
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (property "Reference" "U"
+      (at 0 10.16 0)
+      (effects (font (size 1.27 1.27)))
+    )
+    (property "Value" "MP1584EN"
+      (at 0 -10.16 0)
+      (effects (font (size 1.27 1.27)))
+    )
+    (property "Footprint" "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm"
+      (at 0 -12.7 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (property "Datasheet" "https://www.monolithicpower.com/en/documentview/productdocument/index/version/2/document_type/Datasheet/lang/en/sku/MP1584EN-LF-Z"
+      (at 0 -15.24 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (property "Description" "3A 28V Step-Down Converter, Adjustable Output, SOIC-8"
+      (at 0 -17.78 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (symbol "MP1584EN_0_1"
+      (rectangle
+        (start -6.35 8.89)
+        (end 6.35 -8.89)
+        (stroke (width 0.254) (type default))
+        (fill (type background))
+      )
+    )
+    (symbol "MP1584EN_1_1"
+      ;; IN - Power input (top left)
+      (pin power_in line
+        (at -2.54 11.43 270)
+        (length 2.54)
+        (name "IN" (effects (font (size 1.27 1.27))))
+        (number "2" (effects (font (size 1.27 1.27))))
+      )
+      ;; BST - Bootstrap (top right)
+      (pin passive line
+        (at 2.54 11.43 270)
+        (length 2.54)
+        (name "BST" (effects (font (size 1.27 1.27))))
+        (number "7" (effects (font (size 1.27 1.27))))
+      )
+      ;; GND - Ground (bottom)
+      (pin power_in line
+        (at 0 -11.43 90)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "3" (effects (font (size 1.27 1.27))))
+      )
+      ;; EN - Enable (left)
+      (pin input line
+        (at -8.89 5.08 0)
+        (length 2.54)
+        (name "EN" (effects (font (size 1.27 1.27))))
+        (number "5" (effects (font (size 1.27 1.27))))
+      )
+      ;; FREQ - Frequency set (left)
+      (pin input line
+        (at -8.89 0 0)
+        (length 2.54)
+        (name "FREQ" (effects (font (size 1.27 1.27))))
+        (number "8" (effects (font (size 1.27 1.27))))
+      )
+      ;; FB - Feedback (left)
+      (pin input line
+        (at -8.89 -5.08 0)
+        (length 2.54)
+        (name "FB" (effects (font (size 1.27 1.27))))
+        (number "4" (effects (font (size 1.27 1.27))))
+      )
+      ;; SW - Switch output (right)
+      (pin output line
+        (at 8.89 5.08 180)
+        (length 2.54)
+        (name "SW" (effects (font (size 1.27 1.27))))
+        (number "1" (effects (font (size 1.27 1.27))))
+      )
+      ;; VCC - Internal regulator output (right)
+      (pin power_out line
+        (at 8.89 -2.54 180)
+        (length 2.54)
+        (name "VCC" (effects (font (size 1.27 1.27))))
+        (number "6" (effects (font (size 1.27 1.27))))
+      )
+    )
+  )
+
+  ;; ============================================================
+  ;; MQ-137 - Ammonia Gas Sensor Module
+  ;; Datasheet: Winsen MQ-137 semiconductor gas sensor
+  ;; Package: TO-5 style, 6 pins (2 heater + 2 sense pairs)
+  ;; Schematic: 4 logical pins (VH, GND, AOUT, BOUT)
+  ;; ============================================================
+  (symbol "MQ-137"
+    (pin_names (offset 1.016))
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (property "Reference" "U"
+      (at 0 8.89 0)
+      (effects (font (size 1.27 1.27)))
+    )
+    (property "Value" "MQ-137"
+      (at 0 -8.89 0)
+      (effects (font (size 1.27 1.27)))
+    )
+    (property "Footprint" "petfilter:MQ-137"
+      (at 0 -11.43 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (property "Datasheet" "https://www.winsen-sensor.com/d/files/MQ-137.pdf"
+      (at 0 -13.97 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (property "Description" "Ammonia (NH3) Semiconductor Gas Sensor, 5-200ppm"
+      (at 0 -16.51 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (symbol "MQ-137_0_1"
+      (rectangle
+        (start -5.08 7.62)
+        (end 5.08 -7.62)
+        (stroke (width 0.254) (type default))
+        (fill (type background))
+      )
+      ;; Gas symbol inside box
+      (text "NH3"
+        (at 0 0 0)
+        (effects (font (size 2.54 2.54)))
+      )
+    )
+    (symbol "MQ-137_1_1"
+      ;; VH - Heater power (top)
+      (pin power_in line
+        (at 0 10.16 270)
+        (length 2.54)
+        (name "VH" (effects (font (size 1.27 1.27))))
+        (number "1" (effects (font (size 1.27 1.27))))
+      )
+      ;; GND - Ground (bottom)
+      (pin power_in line
+        (at 0 -10.16 90)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "3" (effects (font (size 1.27 1.27))))
+      )
+      ;; AOUT - Analog output A (right)
+      (pin output line
+        (at 7.62 2.54 180)
+        (length 2.54)
+        (name "AOUT" (effects (font (size 1.27 1.27))))
+        (number "2" (effects (font (size 1.27 1.27))))
+      )
+      ;; BOUT - Analog output B (right)
+      (pin output line
+        (at 7.62 -2.54 180)
+        (length 2.54)
+        (name "BOUT" (effects (font (size 1.27 1.27))))
+        (number "4" (effects (font (size 1.27 1.27))))
+      )
+    )
+  )
+
+  ;; ============================================================
+  ;; XKC-Y25-T12V - Non-Contact Water Level Sensor
+  ;; Capacitive sensing, digital output (high/low)
+  ;; Interface: 3-wire (VCC, GND, OUT)
+  ;; ============================================================
+  (symbol "XKC-Y25-T12V"
+    (pin_names (offset 1.016))
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (property "Reference" "U"
+      (at 0 6.35 0)
+      (effects (font (size 1.27 1.27)))
+    )
+    (property "Value" "XKC-Y25-T12V"
+      (at 0 -6.35 0)
+      (effects (font (size 1.27 1.27)))
+    )
+    (property "Footprint" "Connector_JST:JST_PH_B3B-PH-K_1x03_P2.00mm_Vertical"
+      (at 0 -8.89 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (property "Datasheet" ""
+      (at 0 -11.43 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (property "Description" "Non-Contact Capacitive Water Level Sensor, 5-12V, NPN Output"
+      (at 0 -13.97 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (symbol "XKC-Y25-T12V_0_1"
+      (rectangle
+        (start -5.08 5.08)
+        (end 5.08 -5.08)
+        (stroke (width 0.254) (type default))
+        (fill (type background))
+      )
+    )
+    (symbol "XKC-Y25-T12V_1_1"
+      ;; VCC (top)
+      (pin power_in line
+        (at 0 7.62 270)
+        (length 2.54)
+        (name "VCC" (effects (font (size 1.27 1.27))))
+        (number "1" (effects (font (size 1.27 1.27))))
+      )
+      ;; GND (bottom)
+      (pin power_in line
+        (at 0 -7.62 90)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "2" (effects (font (size 1.27 1.27))))
+      )
+      ;; OUT - Digital output (right)
+      (pin output line
+        (at 7.62 0 180)
+        (length 2.54)
+        (name "OUT" (effects (font (size 1.27 1.27))))
+        (number "3" (effects (font (size 1.27 1.27))))
+      )
+    )
+  )
+
+  ;; ============================================================
+  ;; YF-S201 - Hall-Effect Water Flow Sensor
+  ;; Pulse output proportional to flow rate
+  ;; Interface: 3-wire (VCC, GND, PULSE)
+  ;; ============================================================
+  (symbol "YF-S201"
+    (pin_names (offset 1.016))
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (property "Reference" "U"
+      (at 0 6.35 0)
+      (effects (font (size 1.27 1.27)))
+    )
+    (property "Value" "YF-S201"
+      (at 0 -6.35 0)
+      (effects (font (size 1.27 1.27)))
+    )
+    (property "Footprint" "Connector_JST:JST_PH_B3B-PH-K_1x03_P2.00mm_Vertical"
+      (at 0 -8.89 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (property "Datasheet" ""
+      (at 0 -11.43 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (property "Description" "Hall-Effect Water Flow Sensor, 1-30 L/min, Pulse Output"
+      (at 0 -13.97 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (symbol "YF-S201_0_1"
+      (rectangle
+        (start -5.08 5.08)
+        (end 5.08 -5.08)
+        (stroke (width 0.254) (type default))
+        (fill (type background))
+      )
+    )
+    (symbol "YF-S201_1_1"
+      ;; VCC (top)
+      (pin power_in line
+        (at 0 7.62 270)
+        (length 2.54)
+        (name "VCC" (effects (font (size 1.27 1.27))))
+        (number "1" (effects (font (size 1.27 1.27))))
+      )
+      ;; GND (bottom)
+      (pin power_in line
+        (at 0 -7.62 90)
+        (length 2.54)
+        (name "GND" (effects (font (size 1.27 1.27))))
+        (number "2" (effects (font (size 1.27 1.27))))
+      )
+      ;; PULSE - Pulse output (right)
+      (pin output line
+        (at 7.62 0 180)
+        (length 2.54)
+        (name "PULSE" (effects (font (size 1.27 1.27))))
+        (number "3" (effects (font (size 1.27 1.27))))
+      )
+    )
+  )
+)

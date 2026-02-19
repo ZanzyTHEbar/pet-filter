@@ -1,0 +1,262 @@
+{
+  "version": 1,
+  "author": "PetFilter Engineering",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "board-esp32-s3-devkitc-1",
+      "id": "esp",
+      "top": 0,
+      "left": 200,
+      "attrs": { "flashSize": "4", "psramSize": "2" }
+    },
+    {
+      "type": "wokwi-text",
+      "id": "title",
+      "top": -60,
+      "left": 160,
+      "attrs": { "text": "PetFilter — Venturi Air Scrubber Simulator" }
+    },
+
+    {
+      "type": "wokwi-gas-sensor",
+      "id": "nh3",
+      "top": -100,
+      "left": -100,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-text",
+      "id": "label_nh3",
+      "top": -130,
+      "left": -120,
+      "attrs": { "text": "NH3 Sensor (MQ-137)" }
+    },
+
+    {
+      "type": "wokwi-ntc-temperature-sensor",
+      "id": "ntc",
+      "top": 50,
+      "left": -100,
+      "attrs": { "beta": "3950" }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r_ntc",
+      "top": 100,
+      "left": -100,
+      "rotate": 90,
+      "attrs": { "value": "10000" }
+    },
+    {
+      "type": "wokwi-text",
+      "id": "label_temp",
+      "top": 20,
+      "left": -130,
+      "attrs": { "text": "Temperature (NTC)" }
+    },
+
+    {
+      "type": "wokwi-potentiometer",
+      "id": "flow_sim",
+      "top": 200,
+      "left": -100,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-text",
+      "id": "label_flow",
+      "top": 170,
+      "left": -130,
+      "attrs": { "text": "Flow Rate Sim" }
+    },
+
+    {
+      "type": "wokwi-slide-switch",
+      "id": "water_a",
+      "top": 320,
+      "left": -80,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-text",
+      "id": "label_wa",
+      "top": 300,
+      "left": -110,
+      "attrs": { "text": "Tank A Level" }
+    },
+
+    {
+      "type": "wokwi-slide-switch",
+      "id": "water_b",
+      "top": 380,
+      "left": -80,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-text",
+      "id": "label_wb",
+      "top": 360,
+      "left": -110,
+      "attrs": { "text": "Tank B Level" }
+    },
+
+    {
+      "type": "wokwi-pushbutton",
+      "id": "interlock",
+      "top": 450,
+      "left": -60,
+      "attrs": { "color": "red", "label": "UVC Lid Open" }
+    },
+    {
+      "type": "wokwi-text",
+      "id": "label_interlock",
+      "top": 430,
+      "left": -110,
+      "attrs": { "text": "UVC Interlock" }
+    },
+
+    {
+      "type": "wokwi-led",
+      "id": "pump_led",
+      "top": -80,
+      "left": 580,
+      "attrs": { "color": "green" }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r_pump",
+      "top": -80,
+      "left": 530,
+      "rotate": 90,
+      "attrs": { "value": "220" }
+    },
+    {
+      "type": "wokwi-text",
+      "id": "label_pump",
+      "top": -110,
+      "left": 550,
+      "attrs": { "text": "Pump Motor" }
+    },
+
+    {
+      "type": "wokwi-led",
+      "id": "uvc_led",
+      "top": 20,
+      "left": 580,
+      "attrs": { "color": "purple" }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r_uvc",
+      "top": 20,
+      "left": 530,
+      "rotate": 90,
+      "attrs": { "value": "220" }
+    },
+    {
+      "type": "wokwi-text",
+      "id": "label_uvc",
+      "top": -10,
+      "left": 555,
+      "attrs": { "text": "UVC LEDs" }
+    },
+
+    {
+      "type": "wokwi-rgb-led",
+      "id": "status_led",
+      "top": 140,
+      "left": 580,
+      "attrs": { "common": "cathode" }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r_led_r",
+      "top": 120,
+      "left": 530,
+      "rotate": 90,
+      "attrs": { "value": "220" }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r_led_g",
+      "top": 150,
+      "left": 530,
+      "rotate": 90,
+      "attrs": { "value": "220" }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r_led_b",
+      "top": 180,
+      "left": 530,
+      "rotate": 90,
+      "attrs": { "value": "220" }
+    },
+    {
+      "type": "wokwi-text",
+      "id": "label_status",
+      "top": 100,
+      "left": 545,
+      "attrs": { "text": "Status LED" }
+    },
+
+    {
+      "type": "wokwi-relay-module",
+      "id": "uvc_relay",
+      "top": 280,
+      "left": 560,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-text",
+      "id": "label_relay",
+      "top": 260,
+      "left": 545,
+      "attrs": { "text": "UVC Relay" }
+    }
+  ],
+  "connections": [
+    ["nh3:AO", "esp:5", "orange", ["h20", "v60"]],
+    ["nh3:VCC", "esp:3V3", "red", ["h10", "v40"]],
+    ["nh3:GND", "esp:GND.2", "black", ["h0", "v50"]],
+
+    ["ntc:VCC", "esp:3V3", "red", ["h10"]],
+    ["ntc:OUT", "r_ntc:1", "orange", ["v0"]],
+    ["r_ntc:2", "esp:GND.2", "black", ["v10"]],
+    ["ntc:OUT", "esp:9", "orange", ["h30", "v-20"]],
+
+    ["flow_sim:SIG", "esp:6", "cyan", ["h40", "v-60"]],
+    ["flow_sim:VCC", "esp:3V3", "red", ["h10"]],
+    ["flow_sim:GND", "esp:GND.2", "black", ["h0"]],
+
+    ["water_a:3", "esp:3V3", "red", ["h20"]],
+    ["water_a:1", "esp:7", "yellow", ["h40", "v-100"]],
+
+    ["water_b:3", "esp:3V3", "red", ["h20"]],
+    ["water_b:1", "esp:8", "yellow", ["h50", "v-140"]],
+
+    ["interlock:1.l", "esp:3V3", "red", ["h10"]],
+    ["interlock:2.l", "esp:10", "magenta", ["h60", "v-200"]],
+
+    ["esp:1", "r_pump:1", "green", ["h30"]],
+    ["r_pump:2", "pump_led:A", "green", ["v0"]],
+    ["pump_led:C", "esp:GND.1", "black", ["v20"]],
+
+    ["esp:3", "r_uvc:1", "purple", ["h30"]],
+    ["r_uvc:2", "uvc_led:A", "purple", ["v0"]],
+    ["uvc_led:C", "esp:GND.1", "black", ["v20"]],
+
+    ["esp:11", "r_led_r:1", "red", ["h20"]],
+    ["r_led_r:2", "status_led:R", "red", ["v0"]],
+    ["esp:12", "r_led_g:1", "green", ["h20"]],
+    ["r_led_g:2", "status_led:G", "green", ["v0"]],
+    ["esp:13", "r_led_b:1", "blue", ["h20"]],
+    ["r_led_b:2", "status_led:B", "blue", ["v0"]],
+    ["status_led:COM", "esp:GND.1", "black", ["v20"]],
+
+    ["esp:4", "uvc_relay:IN", "purple", ["h40"]],
+    ["uvc_relay:VCC", "esp:5V", "red", ["h10"]],
+    ["uvc_relay:GND", "esp:GND.1", "black", ["h10"]]
+  ]
+}

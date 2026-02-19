@@ -1,0 +1,246 @@
+// PetFilter RPC Schema — FlatBuffers IDL
+//
+// All communication between the device and external clients uses
+// this schema. Messages are wrapped in a length-prefixed frame:
+//
+//   [4 bytes: payload length (little-endian)] [N bytes: FlatBuffer payload]
+//
+// The top-level Message table carries a union discriminator that
+// selects the concrete payload type.
+
+namespace petfilter.rpc;
+
+// ═══════════════════════════════════════════════════════════════
+// Enums
+// ═══════════════════════════════════════════════════════════════
+
+enum DeviceState : byte {
+    Idle    = 0,
+    Sensing = 1,
+    Active  = 2,
+    Purging = 3,
+    Error   = 4,
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Request payloads (client → device)
+// ═══════════════════════════════════════════════════════════════
+
+table GetStatusRequest {}
+
+table StartScrubRequest {}
+
+table StopScrubRequest {}
+
+table ClearFaultsRequest {}
+
+table SetConfigRequest {
+    nh3_activate_ppm: float;
+    nh3_deactivate_ppm: float;
+    pump_duty_percent: ubyte;
+    uvc_duty_percent: ubyte;
+    purge_duration_secs: ushort;
+}
+
+table SetScheduleRequest {
+    interval_secs: uint;
+    duration_secs: ushort;
+    quiet_start_hour: ubyte = 255; // 255 = disabled
+    quiet_end_hour: ubyte = 255;
+}
+
+table CancelScheduleRequest {}
+
+table SubscribeTelemetryRequest {
+    interval_ms: uint = 1000;
+}
+
+table UnsubscribeTelemetryRequest {}
+
+table GetDeviceInfoRequest {}
+
+// ═══════════════════════════════════════════════════════════════
+// Response payloads (device → client)
+// ═══════════════════════════════════════════════════════════════
+
+table StatusResponse {
+    state: DeviceState;
+    nh3_ppm: float;
+    nh3_avg_ppm: float;
+    flow_ml_per_min: float;
+    temperature_c: float;
+    tank_a_ok: bool;
+    tank_b_ok: bool;
+    pump_duty: ubyte;
+    uvc_duty: ubyte;
+    fault_flags: ubyte;
+    uptime_secs: ulong;
+}
+
+table DeviceInfoResponse {
+    firmware_version: string;
+    hardware_revision: string;
+    serial_number: string;
+    uptime_secs: ulong;
+}
+
+table AckResponse {
+    success: bool;
+    message: string;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Streaming payloads (device → client, continuous push)
+// ═══════════════════════════════════════════════════════════════
+
+table TelemetryFrame {
+    timestamp_ms: ulong;
+    state: DeviceState;
+    nh3_ppm: float;
+    nh3_avg_ppm: float;
+    flow_ml_per_min: float;
+    temperature_c: float;
+    pump_duty: ubyte;
+    uvc_duty: ubyte;
+    fault_flags: ubyte;
+}
+
+table StateChangeEvent {
+    from_state: DeviceState;
+    to_state: DeviceState;
+    timestamp_ms: ulong;
+}
+
+table FaultEvent {
+    fault_flags: ubyte;
+    is_clear: bool;
+    timestamp_ms: ulong;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Authentication (client → device)
+// ═══════════════════════════════════════════════════════════════
+
+table AuthChallengeRequest {}
+
+table AuthVerifyRequest {
+    session_id: uint;
+    hmac: [ubyte];
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Authentication (device → client)
+// ═══════════════════════════════════════════════════════════════
+
+table AuthChallengeResponse {
+    nonce: [ubyte];
+    session_id: uint;
+}
+
+table AuthVerifyResponse {
+    success: bool;
+    message: string;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// OTA firmware update (client → device)
+// ═══════════════════════════════════════════════════════════════
+
+table OtaBeginRequest {
+    firmware_size: uint;
+    sha256: [ubyte];
+}
+
+table OtaChunkRequest {
+    offset: uint;
+    data: [ubyte];
+}
+
+table OtaFinalizeRequest {}
+
+table OtaResponse {
+    success: bool;
+    message: string;
+    bytes_written: uint;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Diagnostics (client → device)
+// ═══════════════════════════════════════════════════════════════
+
+table GetDiagnosticsRequest {}
+
+table ClearDiagnosticsRequest {}
+
+table CrashEntryFbs {
+    uptime_secs: ulong;
+    reason: string;
+    pc: uint;
+    backtrace: [uint];
+}
+
+table DiagnosticsResponse {
+    uptime_secs: ulong;
+    control_cycles: ulong;
+    fault_count: uint;
+    crash_count: uint;
+    heap_free: uint;
+    heap_min_free: uint;
+    wifi_rssi: byte;
+    nvs_free_entries: uint;
+    ulp_wake_count: uint;
+    crash_entries: [CrashEntryFbs];
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Top-level message envelope
+// ═══════════════════════════════════════════════════════════════
+
+union Payload {
+    // Requests
+    GetStatusRequest,
+    StartScrubRequest,
+    StopScrubRequest,
+    ClearFaultsRequest,
+    SetConfigRequest,
+    SetScheduleRequest,
+    CancelScheduleRequest,
+    SubscribeTelemetryRequest,
+    UnsubscribeTelemetryRequest,
+    GetDeviceInfoRequest,
+
+    // Responses
+    StatusResponse,
+    DeviceInfoResponse,
+    AckResponse,
+
+    // Streaming events
+    TelemetryFrame,
+    StateChangeEvent,
+    FaultEvent,
+
+    // Authentication
+    AuthChallengeRequest,
+    AuthChallengeResponse,
+    AuthVerifyRequest,
+    AuthVerifyResponse,
+
+    // OTA
+    OtaBeginRequest,
+    OtaChunkRequest,
+    OtaFinalizeRequest,
+    OtaResponse,
+
+    // Diagnostics
+    GetDiagnosticsRequest,
+    ClearDiagnosticsRequest,
+    DiagnosticsResponse,
+}
+
+table Message {
+    /// Monotonically increasing message ID for request/response correlation.
+    id: uint;
+    payload: Payload;
+}
+
+root_type Message;

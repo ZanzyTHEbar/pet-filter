@@ -1,0 +1,258 @@
+# KiBot Configuration for PetFilter PCB
+# Ref: https://kibot.readthedocs.io/
+#
+# This file defines all automated outputs for the PetFilter PCB:
+# - ERC (Electrical Rule Check)
+# - DRC (Design Rule Check)
+# - BOM (Bill of Materials)
+# - Gerbers + drill files (for JLCPCB)
+# - Interactive BOM (HTML)
+# - Schematic PDF
+# - PCB PDF (fabrication drawing)
+# - Pick and Place file
+# - 3D render
+
+kibot:
+  version: 1
+
+global:
+  output: '%f-%i.%x'
+  dir: output
+
+preflight:
+  check_zone_fills: true
+  run_erc: true
+  run_drc: true
+  update_xml: true
+  filters:
+    - filter: 'Exclude known warnings'
+      error: 'W099'
+      regex: 'Courtyard'
+
+outputs:
+  # ============================================================
+  # Schematic Outputs
+  # ============================================================
+  - name: schematic_pdf
+    comment: "Schematic PDF export"
+    type: pdf_sch_print
+    dir: output/schematic
+    options:
+      output: '%f-schematic.%x'
+
+  - name: schematic_svg
+    comment: "Schematic SVG export"
+    type: svg_sch_print
+    dir: output/schematic
+    options:
+      output: '%f-schematic.%x'
+
+  # ============================================================
+  # BOM Outputs
+  # ============================================================
+  - name: bom_csv
+    comment: "Bill of Materials (CSV)"
+    type: bom
+    dir: output/bom
+    options:
+      output: '%f-bom.%x'
+      format: CSV
+      columns:
+        - Row
+        - References
+        - Value
+        - Footprint
+        - Quantity Per PCB
+        - field: Description
+          name: Description
+        - field: LCSC
+          name: LCSC Part#
+      group_fields:
+        - Value
+        - Footprint
+      sort_style: ref
+      normalize_values: true
+
+  - name: bom_html
+    comment: "Bill of Materials (HTML)"
+    type: bom
+    dir: output/bom
+    options:
+      output: '%f-bom.html'
+      format: HTML
+      columns:
+        - Row
+        - References
+        - Value
+        - Footprint
+        - Quantity Per PCB
+        - field: Description
+          name: Description
+        - field: LCSC
+          name: LCSC Part#
+      group_fields:
+        - Value
+        - Footprint
+
+  - name: interactive_bom
+    comment: "Interactive HTML BOM (for assembly)"
+    type: ibom
+    dir: output/bom
+    options:
+      output: '%f-ibom.html'
+      dark_mode: true
+      show_fabrication: true
+
+  # ============================================================
+  # Fabrication Outputs (JLCPCB Compatible)
+  # ============================================================
+  - name: gerbers
+    comment: "Gerber files for JLCPCB"
+    type: gerber
+    dir: output/gerbers
+    options:
+      exclude_edge_layer: true
+      exclude_pads_from_silkscreen: true
+      subtract_mask_from_silk: true
+      use_protel_extensions: true
+      create_gerber_job_file: false
+      output: '%f-%i.%x'
+    layers:
+      - F.Cu
+      - B.Cu
+      - F.Paste
+      - B.Paste
+      - F.SilkS
+      - B.SilkS
+      - F.Mask
+      - B.Mask
+      - Edge.Cuts
+
+  - name: drill_files
+    comment: "Drill files for JLCPCB"
+    type: excellon
+    dir: output/gerbers
+    options:
+      metric_units: true
+      pth_and_npth_single_file: false
+      use_aux_axis_as_origin: false
+      output: '%f-%i.%x'
+
+  - name: gerber_zip
+    comment: "Zipped Gerbers for JLCPCB upload"
+    type: compress
+    dir: output
+    options:
+      output: '%f-gerbers-jlcpcb.zip'
+      files:
+        - from_output: gerbers
+          dest: /
+        - from_output: drill_files
+          dest: /
+
+  # ============================================================
+  # Assembly Outputs (JLCPCB SMT)
+  # ============================================================
+  - name: position_file
+    comment: "Pick and Place file for JLCPCB SMT"
+    type: position
+    dir: output/assembly
+    options:
+      output: '%f-cpl.%x'
+      format: CSV
+      units: millimeters
+      separate_files_for_front_and_back: false
+      only_smd: true
+      columns:
+        - id: Ref
+          name: Designator
+        - id: Val
+          name: Val
+        - id: Package
+          name: Package
+        - id: PosX
+          name: Mid X
+        - id: PosY
+          name: Mid Y
+        - id: Rot
+          name: Rotation
+        - id: Side
+          name: Layer
+
+  - name: jlcpcb_bom
+    comment: "BOM formatted for JLCPCB SMT assembly"
+    type: bom
+    dir: output/assembly
+    options:
+      output: '%f-jlcpcb-bom.csv'
+      format: CSV
+      columns:
+        - field: Value
+          name: Comment
+        - field: References
+          name: Designator
+        - field: Footprint
+          name: Footprint
+        - field: LCSC
+          name: "LCSC Part #"
+        - field: Quantity Per PCB
+          name: Qty
+
+  # ============================================================
+  # Documentation Outputs
+  # ============================================================
+  - name: pcb_top_pdf
+    comment: "PCB top layer fabrication drawing"
+    type: pcb_print
+    dir: output/docs
+    options:
+      output: '%f-pcb-top.pdf'
+      format: PDF
+      pages:
+        - layers:
+            - F.Cu
+            - F.SilkS
+            - Edge.Cuts
+          sheet: 'Top Copper + Silkscreen'
+        - layers:
+            - B.Cu
+            - B.SilkS
+            - Edge.Cuts
+          sheet: 'Bottom Copper + Silkscreen'
+          mirror: true
+
+  - name: pcb_3d_top
+    comment: "3D render - top view"
+    type: render_3d
+    dir: output/renders
+    options:
+      output: '%f-3d-top.png'
+      rotate_x: 0
+      rotate_z: 0
+      ray_tracing: true
+      width: 1920
+      height: 1080
+
+  - name: pcb_3d_perspective
+    comment: "3D render - perspective view"
+    type: render_3d
+    dir: output/renders
+    options:
+      output: '%f-3d-perspective.png'
+      rotate_x: 3
+      rotate_z: 2
+      ray_tracing: true
+      width: 1920
+      height: 1080
+
+  # ============================================================
+  # Design Review Outputs
+  # ============================================================
+  - name: netlist
+    comment: "Netlist export"
+    type: netlist
+    dir: output/design
+    options:
+      output: '%f-netlist.net'
+
+
