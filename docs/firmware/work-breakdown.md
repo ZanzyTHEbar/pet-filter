@@ -589,6 +589,21 @@ network communication. BLE provisioning gates WiFi, which gates mDNS.
 
 ## Improvements
 
+- Firmware versioning
+  - monotonic version counter in eFuse
+  - version stored in NVS
+  - version reported in RPC
+  - version reported in telemetry
+  - version reported in diagnostics
+  - version reported in logging
+  - version reported in error handling
+- CPU Task Pinning, ESP32-S3 has 2 cores, can pin tasks to cores
+ - main task to core 0
+ - sensor reading task to core 1
+ - control task to core 0
+ - communication task to core 1
+ - safety watchdog to core 0
+ - or some variant of this following best practices and FreeRTOS best practices
 - Asynchronous communication (RPC over TCP/BLE)
   - async-tcp
   - async-rpc
