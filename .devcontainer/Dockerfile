@@ -49,3 +49,21 @@ WORKDIR /workspace/firmware
 # Source the toolchain env for build commands (non-interactive shells)
 ENV LIBCLANG_PATH="/home/esp/.rustup/toolchains/esp/xtensa-esp32-elf-clang/esp-20.1.1_20250829/esp-clang/lib"
 ENV PATH="/home/esp/.rustup/toolchains/esp/xtensa-esp-elf/esp-15.2.0_20250920/xtensa-esp-elf/bin:/home/esp/.cargo/bin:${PATH}"
+
+# ── QEMU for ESP32-S3 emulation ──────────────────────────────
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgcrypt20 \
+        libglib2.0-0 \
+        libpixman-1-0 \
+        libslirp0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install QEMU from ESP-IDF tools (supports ESP32-S3 xtensa)
+RUN bash -c 'source /home/esp/export-esp.sh && python3 $IDF_PATH/tools/idf_tools.py install qemu-xtensa && echo "QEMU installed"' \
+    || echo "QEMU install skipped (may need manual install)"
+
+# Install just (task runner)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+
+USER esp

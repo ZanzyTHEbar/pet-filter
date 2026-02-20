@@ -4,8 +4,9 @@ CONFIG_IDF_TARGET="esp32s3"
 # Flash size (ESP32-S3-WROOM-1 = 8 MB)
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 
-# Partition table (OTA support with A/B slots)
-CONFIG_PARTITION_TABLE_TWO_OTA=y
+# Custom partition table (OTA A/B + certs partition)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
 # WiFi
 CONFIG_ESP_WIFI_ENABLED=y
@@ -43,6 +44,15 @@ CONFIG_MBEDTLS_SSL_MAX_CONTENT_LEN=4096
 CONFIG_MBEDTLS_HARDWARE_AES=y
 CONFIG_MBEDTLS_HARDWARE_SHA=y
 
+# mbedTLS — X.509 certificate support (Phase 3: cert-based mutual auth)
+CONFIG_MBEDTLS_X509_CRT_PARSE_C=y
+CONFIG_MBEDTLS_PEM_PARSE_C=y
+CONFIG_MBEDTLS_KEY_EXCHANGE_ECDHE_RSA=y
+CONFIG_MBEDTLS_KEY_EXCHANGE_ECDHE_ECDSA=y
+CONFIG_MBEDTLS_ECP_C=y
+CONFIG_MBEDTLS_ECDSA_C=y
+CONFIG_MBEDTLS_ECP_DP_SECP256R1_ENABLED=y
+
 # Watchdog (10s timeout — main loop must feed within this window)
 CONFIG_ESP_TASK_WDT=y
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
@@ -53,6 +63,32 @@ CONFIG_MDNS_ENABLED=y
 # Log level
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
-# Stack sizes
-CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# ── Dual-core task pinning ──────────────────────────────────────
+# Pin main() to Core 1 (APP_CPU) — dedicated to safety-critical control.
+# Protocol stacks (WiFi, BLE, lwIP) remain on Core 0 (PRO_CPU).
+CONFIG_FREERTOS_UNICORE=n
+CONFIG_ESP_MAIN_TASK_AFFINITY=1
+CONFIG_ESP_TIMER_TASK_AFFINITY=0
+
+# Stack sizes — main task enlarged for complex control loop + TLS API calls
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=4096
+
+# FreeRTOS runtime observability
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+
+# Stack overflow detection (hardware watchpoint at stack end)
+CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y
+CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y
+
+# ── Core dump to flash (crash diagnostics via RPC) ─────────────
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+CONFIG_ESP_COREDUMP_MAX_TASKS_NUM=16
+
+# ── BLE security (bonding + encrypted link) ─────────────────────
+CONFIG_BT_SMP_ENABLE=y
+CONFIG_BT_BLE_SMP_ENABLE=y
+CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y

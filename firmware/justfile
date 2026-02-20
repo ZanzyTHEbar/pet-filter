@@ -1,0 +1,81 @@
+# PetFilter Firmware — Build & Test Task Runner
+# Usage: just <recipe>  |  just --list
+
+esp_target := "xtensa-esp32s3-espidf"
+host_target := "x86_64-unknown-linux-gnu"
+esp_toolchain := "esp"
+host_toolchain := "stable"
+
+# ── ESP32-S3 target ──────────────────────────────────────────
+
+# Build release firmware for ESP32-S3
+build:
+    cargo +{{esp_toolchain}} build --release --target {{esp_target}} -Z build-std=std,panic_abort
+
+# Check firmware compiles (faster than full build)
+check:
+    cargo +{{esp_toolchain}} check --target {{esp_target}} -Z build-std=std,panic_abort
+
+# Flash firmware to device and open serial monitor
+flash:
+    cargo +{{esp_toolchain}} run --release --target {{esp_target}} -Z build-std=std,panic_abort
+
+# ── Host target (pure-logic testing) ─────────────────────────
+
+# Run all unit tests on host
+test:
+    cargo +{{host_toolchain}} test --lib --no-default-features --target {{host_target}}
+
+# Run a specific test by name
+test-one name:
+    cargo +{{host_toolchain}} test --lib --no-default-features --target {{host_target}} {{name}}
+
+# Run tests with output visible (nocapture)
+test-verbose:
+    cargo +{{host_toolchain}} test --lib --no-default-features --target {{host_target}} -- --nocapture
+
+# ── Code quality ─────────────────────────────────────────────
+
+# Clippy lint on host target
+lint:
+    cargo +{{host_toolchain}} clippy --lib --tests --no-default-features --target {{host_target}} -- -D warnings
+
+# Check formatting
+fmt:
+    cargo +{{host_toolchain}} fmt --all -- --check
+
+# Auto-fix formatting
+fmt-fix:
+    cargo +{{host_toolchain}} fmt --all
+
+# Dependency security audit
+audit:
+    cargo audit
+
+# ── Fuzzing ──────────────────────────────────────────────────
+
+# Run a fuzz target (e.g., just fuzz fuzz_frame_decoder)
+fuzz target duration="60":
+    cargo +nightly fuzz run {{target}} -- -max_total_time={{duration}}
+
+# Verify all fuzz targets compile
+fuzz-check:
+    cargo +nightly fuzz check
+
+# ── QEMU simulation ─────────────────────────────────────────
+
+# Build and run in QEMU emulator
+qemu: build
+    idf.py qemu monitor
+
+# Build and start QEMU with GDB server
+qemu-gdb: build
+    idf.py qemu --gdb monitor
+
+# ── Compound recipes ─────────────────────────────────────────
+
+# Full local CI pipeline (mirrors GitHub Actions)
+ci: fmt lint test audit
+
+# Pre-commit check (fast)
+pre-commit: fmt lint test

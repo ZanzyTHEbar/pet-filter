@@ -1,11 +1,11 @@
 [package]
 name = "petfilter"
 version = "0.2.0"
-edition = "2021"
+edition = "2024"
 authors = ["PetFilter Engineering"]
 description = "PetFilter venturi air scrubber firmware for ESP32-S3"
 license = "Proprietary"
-rust-version = "1.82"
+rust-version = "1.85"
 
 
 [lib]
@@ -15,34 +15,61 @@ path = "src/lib.rs"
 [[bin]]
 name = "petfilter"
 path = "src/main.rs"
+required-features = ["espidf"]
+
+[features]
+default = ["espidf"]
+espidf = [
+    "dep:esp-idf-svc",
+    "dep:esp-idf-hal",
+    "dep:esp-idf-sys",
+    "dep:esp-ota",
+    "dep:esp_idf_logger",
+    "dep:embuild",
+]
 
 [lints.rust]
 unused_must_use = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 
 [lints.clippy]
-all = "warn"
-pedantic = "warn"
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
 # Exceptions for embedded development where these are common/acceptable
 cast_possible_truncation = "allow"
 cast_sign_loss = "allow"
+cast_lossless = "allow"
+cast_precision_loss = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 module_name_repetitions = "allow"
 must_use_candidate = "allow"
+# Pedantic lints that are noise in embedded/firmware context
+doc_markdown = "allow"
+unused_self = "allow"
+new_without_default = "allow"
+uninlined_format_args = "allow"
+items_after_statements = "allow"
+ignored_unit_patterns = "allow"
+struct_excessive_bools = "allow"
+too_many_lines = "allow"
 
 [dependencies]
-# ESP-IDF framework bindings
-esp-idf-svc = { version = "0.51", features = ["binstart", "alloc", "experimental"] }
-esp-idf-hal = "0.45"
-esp-idf-sys = { version = "0.36", features = ["binstart"] }
+# ESP-IDF framework bindings (optional — disabled for host-target tests)
+esp-idf-svc = { version = "0.51", features = [
+    "binstart",
+    "alloc",
+    "experimental",
+], optional = true }
+esp-idf-hal = { version = "0.45", optional = true }
+esp-idf-sys = { version = "0.36", features = ["binstart"], optional = true }
 
 # Embedded HAL traits (hardware abstraction)
 embedded-hal = "1.0"
 
 # Logging
 log = "0.4"
-esp_idf_logger = "0.1"
+esp_idf_logger = { version = "0.1", optional = true }
 
 # Error handling
 anyhow = "1"
@@ -56,15 +83,49 @@ serde_json = { version = "1", default-features = false, features = ["alloc"] }
 
 # FlatBuffers runtime (matches flatc 25.12.19 codegen)
 flatbuffers = "25.12.19"
-postcard = { version = "1.1.3", features = ["alloc"] }
+
+# OTA updates (safe Rust wrapper around esp-idf OTA API — optional)
+esp-ota = { version = "0.2", optional = true }
+
+# Cryptographic HMAC-SHA256 (pure Rust, no_std, constant-time)
+hmac-sha256 = { version = "1.1", default-features = false, features = [
+    "opt_size",
+] }
+
+# Stack-allocated rate limiter (no_std, token-bucket)
+burster = "0.1"
+
+# Compact binary serialization (no_std, serde-compatible)
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+
+# Async I/O reactor for MCUs (select-based, minimal memory)
+async-io-mini = "0.4"
+
+# Lightweight async executor (no_std with alloc)
+edge-executor = "0.4"
+
+# Lightweight futures utilities (block_on for async executor)
+futures-lite = "2"
+
+# Async-aware synchronization primitives (channels, signals)
+embassy-sync = { version = "0.7", default-features = false }
+
+# Async timer driver for embassy ecosystem
+embassy-time = { version = "0.5", features = ["generic-queue-8"] }
+
+# Pure Rust DEFLATE compression (no_std)
+miniz_oxide = { version = "0.9", default-features = false, features = [
+    "with-alloc",
+] }
 
 [dev-dependencies]
+critical-section = { version = "1.2", features = ["std"] }
 
 [target.'cfg(not(target_os = "espidf"))'.dev-dependencies]
 proptest = "1"
 
 [build-dependencies]
-embuild = "0.33"
+embuild = { version = "0.33", optional = true }
 
 [profile.release]
 opt-level = "s"

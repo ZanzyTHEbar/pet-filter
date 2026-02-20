@@ -1,0 +1,15 @@
+# PetFilter ESP32-S3 Custom Partition Table
+# Name,      Type, SubType, Offset,  Size,    Flags
+# ─── Bootloader & NVS ───────────────────────────────────────────
+nvs,          data, nvs,     0x9000,  0x6000,
+otadata,      data, ota,     0xf000,  0x2000,
+phy_init,     data, phy,     0x11000, 0x1000,
+# ─── OTA firmware slots (A/B) ───────────────────────────────────
+ota_0,        app,  ota_0,   0x20000, 0x1E0000,
+ota_1,        app,  ota_1,   0x200000,0x1E0000,
+# ─── NVS keys (encrypted NVS support) ──────────────────────────
+nvs_key,      data, nvs_keys,0x3E0000,0x1000,
+# ─── X.509 certificate storage (64 KB) ─────────────────────────
+certs,        data, nvs,     0x3E1000,0x10000,
+# ─── Coredump partition (for crash analysis) ────────────────────
+coredump,     data, coredump,0x3F1000,0xF000,
