@@ -16,8 +16,6 @@ pub enum StreamState {
 
 /// Manages streaming telemetry to a connected client.
 /// Manages streaming telemetry subscriptions.
-/// Not yet wired into RpcEngine (inline telemetry counters used for now).
-#[allow(dead_code)]
 pub struct StreamManager {
     state: StreamState,
     elapsed_ms: u32,
@@ -25,7 +23,6 @@ pub struct StreamManager {
     dropped_count: u32,
 }
 
-#[allow(dead_code)]
 impl StreamManager {
     pub fn new() -> Self {
         Self {

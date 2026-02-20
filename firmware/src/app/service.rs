@@ -15,6 +15,7 @@
 use log::{info, warn};
 
 use crate::config::SystemConfig;
+use crate::control::pid::PidController;
 use crate::fsm::context::FsmContext;
 use crate::fsm::states::build_state_table;
 use crate::fsm::{Fsm, StateId};
@@ -33,6 +34,8 @@ pub struct AppService {
     fsm: Fsm,
     ctx: FsmContext,
     safety: SafetySupervisor,
+    /// PID controller for closed-loop pump flow regulation.
+    pid: PidController,
     /// Seconds per control tick (derived from config).
     tick_secs: f32,
     tick_count: u64,
@@ -46,15 +49,25 @@ impl AppService {
     /// Does **not** start the FSM — call [`start`] or [`start_from`] next.
     pub fn new(config: SystemConfig) -> Self {
         let tick_secs = config.control_loop_interval_ms as f32 / 1000.0;
+        let pump_flow = config.pump_flow_ml_per_min as f32;
         let safety = SafetySupervisor::new(&config);
         let ctx = FsmContext::new(config);
         let state_table = build_state_table();
         let fsm = Fsm::new(state_table, StateId::Idle);
 
+        let mut pid = PidController::new(
+            2.0, // Kp — proportional gain
+            0.5, // Ki — integral gain (slow wind-up for steady-state)
+            0.1, // Kd — derivative gain (dampen oscillation)
+            pump_flow,
+        );
+        pid.set_limits(0.0, 100.0);
+
         Self {
             fsm,
             ctx,
             safety,
+            pid,
             tick_secs,
             tick_count: 0,
             config_dirty: false,
@@ -86,11 +99,7 @@ impl AppService {
     /// The `hw` parameter satisfies **both** [`SensorPort`] and
     /// [`ActuatorPort`] — this avoids a double mutable borrow while
     /// keeping the port boundary explicit.
-    pub fn tick(
-        &mut self,
-        hw: &mut (impl SensorPort + ActuatorPort),
-        sink: &mut impl EventSink,
-    ) {
+    pub fn tick(&mut self, hw: &mut (impl SensorPort + ActuatorPort), sink: &mut impl EventSink) {
         self.tick_count += 1;
         let prev_state = self.fsm.current_state();
 
@@ -99,7 +108,8 @@ impl AppService {
         self.ctx.sensors = snapshot;
 
         // 2. Safety evaluation
-        self.safety.set_pump_commanded(self.ctx.commands.pump_duty > 0);
+        self.safety
+            .set_pump_commanded(self.ctx.commands.pump_duty > 0);
         let faults = self.safety.evaluate(&snapshot);
         self.ctx.fault_flags = faults;
 
@@ -112,10 +122,18 @@ impl AppService {
         // 3. FSM tick (pure state logic)
         self.fsm.tick(&mut self.ctx);
 
-        // 4. Apply actuator commands via ActuatorPort
+        // 4. PID flow regulation — modulate pump duty based on actual vs target flow
+        if self.ctx.commands.pump_duty > 0 && snapshot.flow_detected {
+            let pid_duty = self.pid.compute(snapshot.flow_ml_per_min, self.tick_secs);
+            self.ctx.commands.pump_duty = (pid_duty as u8).clamp(10, 100);
+        } else if self.ctx.commands.pump_duty > 0 {
+            self.pid.reset();
+        }
+
+        // 5. Apply actuator commands via ActuatorPort
         self.apply_actuators(hw);
 
-        // 5. Emit state change if the FSM moved
+        // 6. Emit state change if the FSM moved
         let new_state = self.fsm.current_state();
         if new_state != prev_state {
             sink.emit(&AppEvent::StateChanged {
@@ -138,8 +156,7 @@ impl AppService {
             AppCommand::StartScrub => {
                 if self.fsm.current_state() == StateId::Idle {
                     let prev = self.fsm.current_state();
-                    self.fsm
-                        .force_transition(StateId::Active, &mut self.ctx);
+                    self.fsm.force_transition(StateId::Active, &mut self.ctx);
                     self.apply_actuators(hw);
                     sink.emit(&AppEvent::StateChanged {
                         from: prev,
@@ -225,10 +242,7 @@ impl AppService {
         }
 
         // ── UVC (double-gated: interlock + safety) ───────────
-        if cmds.uvc_duty > 0
-            && snap.uvc_interlock_closed
-            && !self.safety.has_faults()
-        {
+        if cmds.uvc_duty > 0 && snap.uvc_interlock_closed && !self.safety.has_faults() {
             hw.enable_uvc(cmds.uvc_duty);
         } else if hw.is_uvc_on() {
             if self.safety.has_faults() {

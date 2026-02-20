@@ -117,7 +117,10 @@ fn sensing_update(ctx: &mut FsmContext) -> Option<StateId> {
 
     // If NH3 drops back below activation threshold → false alarm, return to Idle
     if ctx.sensors.nh3_avg_ppm < ctx.config.nh3_activate_threshold_ppm {
-        info!("SENSING: NH3 avg dropped to {:.1} ppm, returning to Idle", ctx.sensors.nh3_avg_ppm);
+        info!(
+            "SENSING: NH3 avg dropped to {:.1} ppm, returning to Idle",
+            ctx.sensors.nh3_avg_ppm
+        );
         return Some(StateId::Idle);
     }
 
@@ -204,7 +207,10 @@ fn purging_update(ctx: &mut FsmContext) -> Option<StateId> {
 
     // If NH3 spikes back up during purge → skip back to Active
     if ctx.sensors.nh3_avg_ppm >= ctx.config.nh3_activate_threshold_ppm {
-        info!("PURGING: NH3 re-elevated to {:.1} ppm, returning to Active", ctx.sensors.nh3_avg_ppm);
+        info!(
+            "PURGING: NH3 re-elevated to {:.1} ppm, returning to Active",
+            ctx.sensors.nh3_avg_ppm
+        );
         return Some(StateId::Active);
     }
 
@@ -225,7 +231,10 @@ fn error_enter(ctx: &mut FsmContext) {
     // Kill everything immediately.
     ctx.commands = super::context::ActuatorCommands::all_off();
     ctx.commands.led_rgb = (255, 0, 0); // red — fault
-    warn!("ERROR: all actuators disabled, fault_flags=0b{:08b}", ctx.fault_flags);
+    warn!(
+        "ERROR: all actuators disabled, fault_flags=0b{:08b}",
+        ctx.fault_flags
+    );
 }
 
 fn error_exit(ctx: &mut FsmContext) {

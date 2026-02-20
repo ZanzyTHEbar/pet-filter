@@ -47,7 +47,7 @@ impl Default for SystemConfig {
     fn default() -> Self {
         Self {
             // Pump
-            pump_flow_ml_per_min: 1000,  // 1 L/min
+            pump_flow_ml_per_min: 1000, // 1 L/min
             pump_duty_percent: 70,
 
             // NH3 thresholds
@@ -64,9 +64,67 @@ impl Default for SystemConfig {
             min_water_level_percent: 20,
 
             // Timing
-            sensor_read_interval_ms: 100,    // 10 Hz
-            control_loop_interval_ms: 1000,  // 1 Hz
-            telemetry_interval_secs: 60,     // 1/min
+            sensor_read_interval_ms: 100,   // 10 Hz
+            control_loop_interval_ms: 1000, // 1 Hz
+            telemetry_interval_secs: 60,    // 1/min
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_config_is_sane() {
+        let c = SystemConfig::default();
+        assert!(c.nh3_activate_threshold_ppm > c.nh3_deactivate_threshold_ppm);
+        assert!(c.pump_duty_percent > 0 && c.pump_duty_percent <= 100);
+        assert!(c.uvc_duty_percent > 0 && c.uvc_duty_percent <= 100);
+        assert!(c.max_temperature_c > 0.0);
+        assert!(c.purge_duration_secs > 0);
+        assert!(c.control_loop_interval_ms > 0);
+        assert!(c.sensor_read_interval_ms > 0);
+    }
+
+    #[test]
+    fn serde_roundtrip() {
+        let c = SystemConfig::default();
+        let json = serde_json::to_string(&c).unwrap();
+        let c2: SystemConfig = serde_json::from_str(&json).unwrap();
+        assert!((c.nh3_activate_threshold_ppm - c2.nh3_activate_threshold_ppm).abs() < 0.001);
+        assert_eq!(c.pump_duty_percent, c2.pump_duty_percent);
+        assert_eq!(c.purge_duration_secs, c2.purge_duration_secs);
+    }
+
+    #[test]
+    fn activate_above_deactivate_invariant() {
+        let c = SystemConfig::default();
+        assert!(
+            c.nh3_activate_threshold_ppm > c.nh3_deactivate_threshold_ppm,
+            "activate threshold must be above deactivate to prevent oscillation"
+        );
+    }
+
+    #[test]
+    fn timing_ratios_make_sense() {
+        let c = SystemConfig::default();
+        assert!(
+            c.sensor_read_interval_ms < c.control_loop_interval_ms,
+            "sensor reads should be faster than control loop"
+        );
+        assert!(
+            c.control_loop_interval_ms < c.telemetry_interval_secs * 1000,
+            "control loop should be faster than telemetry"
+        );
+    }
+
+    #[test]
+    fn postcard_roundtrip() {
+        let c = SystemConfig::default();
+        let bytes = postcard::to_allocvec(&c).unwrap();
+        let c2: SystemConfig = postcard::from_bytes(&bytes).unwrap();
+        assert_eq!(c.pump_duty_percent, c2.pump_duty_percent);
+        assert!((c.max_temperature_c - c2.max_temperature_c).abs() < 0.001);
     }
 }

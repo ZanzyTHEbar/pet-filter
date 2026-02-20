@@ -6,8 +6,6 @@
 //! Timer callbacks execute in the ESP timer task context (not ISR), so
 //! they can safely call push_event() which uses AtomicU8.
 
-use crate::events::{push_event, Event};
-
 #[cfg(target_os = "espidf")]
 use esp_idf_svc::sys::*;
 
@@ -22,11 +20,15 @@ static mut CONTROL_TIMER: esp_timer_handle_t = core::ptr::null_mut();
 /// SAFETY: SENSOR_TIMER is written once in `start_timers()` before any
 /// timer callbacks fire.  Only called from the single main task.
 #[cfg(target_os = "espidf")]
-unsafe fn sensor_timer() -> esp_timer_handle_t { unsafe { SENSOR_TIMER } }
+unsafe fn sensor_timer() -> esp_timer_handle_t {
+    unsafe { SENSOR_TIMER }
+}
 
 /// SAFETY: Same invariants as `sensor_timer()`.
 #[cfg(target_os = "espidf")]
-unsafe fn control_timer() -> esp_timer_handle_t { unsafe { CONTROL_TIMER } }
+unsafe fn control_timer() -> esp_timer_handle_t {
+    unsafe { CONTROL_TIMER }
+}
 
 #[cfg(target_os = "espidf")]
 unsafe extern "C" fn sensor_tick_cb(_arg: *mut core::ffi::c_void) {
@@ -58,7 +60,10 @@ pub fn start_timers() {
         };
         let ret = esp_timer_create(&sensor_args, &raw mut SENSOR_TIMER);
         if ret != ESP_OK {
-            log::error!("hw_timer: sensor timer create failed (rc={}) — continuing without sensor ticks", ret);
+            log::error!(
+                "hw_timer: sensor timer create failed (rc={}) — continuing without sensor ticks",
+                ret
+            );
             return;
         }
         let ret = esp_timer_start_periodic(SENSOR_TIMER, 100_000); // 100ms
@@ -77,7 +82,10 @@ pub fn start_timers() {
         };
         let ret = esp_timer_create(&control_args, &raw mut CONTROL_TIMER);
         if ret != ESP_OK {
-            log::error!("hw_timer: control timer create failed (rc={}) — continuing without control ticks", ret);
+            log::error!(
+                "hw_timer: control timer create failed (rc={}) — continuing without control ticks",
+                ret
+            );
             return;
         }
         let ret = esp_timer_start_periodic(CONTROL_TIMER, 1_000_000); // 1s
@@ -103,9 +111,13 @@ pub fn stop_timers() {
     unsafe {
         // SAFETY: sensor_timer()/control_timer() contract — main task only.
         let st = sensor_timer();
-        if !st.is_null() { esp_timer_stop(st); }
+        if !st.is_null() {
+            esp_timer_stop(st);
+        }
         let ct = control_timer();
-        if !ct.is_null() { esp_timer_stop(ct); }
+        if !ct.is_null() {
+            esp_timer_stop(ct);
+        }
     }
 }
 

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! GPIO / peripheral pin assignments for the PetFilter main board.
 //!
 //! Single source of truth — every driver references this module rather than

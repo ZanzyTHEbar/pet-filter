@@ -1,37 +1,30 @@
 //! RPC event sink adapter.
 //!
 //! Implements [`EventSink`] by serialising [`AppEvent`]s into FlatBuffer
-//! `Message` frames and writing them to the transport.  This is the
-//! "push" direction — the device sends events to the connected client
-//! without being asked.
+//! `Message` frames and writing them to a response channel. This is the
+//! "push" direction — the device sends events to connected clients.
 
 use flatbuffers::FlatBufferBuilder;
 use log::info;
 
 use crate::app::events::AppEvent;
 use crate::app::ports::EventSink;
+use crate::rpc::auth::{ClientId, MAX_CLIENTS};
 use crate::rpc::codec::encode_frame;
 use crate::rpc::fb;
-use crate::rpc::transport::Transport;
 
-/// Adapter that bridges AppEvents to the RPC transport.
-/// Bridges AppEvents to the RPC transport for push-direction events.
-/// Not yet wired into main.rs (LogEventSink used for now).
-#[allow(dead_code)]
-pub struct RpcEventSink<T: Transport> {
-    transport: Option<T>,
-    write_buf: [u8; 256],
-    enabled: bool,
+/// Adapter that bridges AppEvents to the RPC channel layer for
+/// push-direction events (state changes, faults).
+///
+pub struct RpcEventSink {
+    subscribed: [bool; MAX_CLIENTS],
     msg_id: u32,
 }
 
-#[allow(dead_code)]
-impl<T: Transport> RpcEventSink<T> {
+impl RpcEventSink {
     pub fn new() -> Self {
         Self {
-            transport: None,
-            write_buf: [0; 256],
-            enabled: false,
+            subscribed: [false; MAX_CLIENTS],
             msg_id: 0x8000_0000,
         }
     }
@@ -42,42 +35,43 @@ impl<T: Transport> RpcEventSink<T> {
         id
     }
 
-    /// Attach a transport (called when an RPC client connects).
-    pub fn attach(&mut self, transport: T) {
-        self.transport = Some(transport);
-        self.enabled = true;
-        info!("RPC sink: transport attached");
+    /// Subscribe a client to push events.
+    pub fn subscribe(&mut self, client_id: ClientId) {
+        if let Some(s) = self.subscribed.get_mut(client_id as usize) {
+            *s = true;
+            info!("RPC sink: client {} subscribed to events", client_id);
+        }
     }
 
-    /// Detach the transport (called on disconnect).
-    pub fn detach(&mut self) -> Option<T> {
-        self.enabled = false;
-        self.transport.take()
+    /// Unsubscribe a client from push events.
+    pub fn unsubscribe(&mut self, client_id: ClientId) {
+        if let Some(s) = self.subscribed.get_mut(client_id as usize) {
+            *s = false;
+        }
     }
 
-    pub fn is_attached(&self) -> bool {
-        self.enabled && self.transport.is_some()
-    }
-
-    fn send_finished(&mut self, fbb: &FlatBufferBuilder<'_>) {
-        let transport = match &mut self.transport {
-            Some(t) => t,
-            None => return,
+    /// Build and enqueue an event frame to all subscribed clients.
+    fn broadcast_frame(&mut self, fbb: &FlatBufferBuilder<'_>) {
+        let payload = fbb.finished_data();
+        let mut buf = [0u8; 256];
+        let Some(len) = encode_frame(payload, &mut buf) else {
+            return;
         };
-        let data = fbb.finished_data();
-        if let Some(len) = encode_frame(data, &mut self.write_buf) {
-            let _ = transport.write(&self.write_buf[..len]);
-            let _ = transport.flush();
+
+        for (i, sub) in self.subscribed.iter().enumerate() {
+            if !sub {
+                continue;
+            }
+            let mut data = heapless::Vec::new();
+            if data.extend_from_slice(&buf[..len]).is_ok() {
+                crate::rpc::io_task::send_response(i as ClientId, data);
+            }
         }
     }
 }
 
-impl<T: Transport> EventSink for RpcEventSink<T> {
+impl EventSink for RpcEventSink {
     fn emit(&mut self, event: &AppEvent) {
-        if !self.enabled || self.transport.is_none() {
-            return;
-        }
-
         match event {
             AppEvent::StateChanged { from, to } => {
                 let mut fbb = FlatBufferBuilder::with_capacity(64);
@@ -98,7 +92,7 @@ impl<T: Transport> EventSink for RpcEventSink<T> {
                     },
                 );
                 fbb.finish(msg, None);
-                self.send_finished(&fbb);
+                self.broadcast_frame(&fbb);
             }
 
             AppEvent::FaultDetected(flags) => {
@@ -120,7 +114,7 @@ impl<T: Transport> EventSink for RpcEventSink<T> {
                     },
                 );
                 fbb.finish(msg, None);
-                self.send_finished(&fbb);
+                self.broadcast_frame(&fbb);
             }
 
             AppEvent::FaultCleared => {
@@ -142,7 +136,7 @@ impl<T: Transport> EventSink for RpcEventSink<T> {
                     },
                 );
                 fbb.finish(msg, None);
-                self.send_finished(&fbb);
+                self.broadcast_frame(&fbb);
             }
 
             _ => {}

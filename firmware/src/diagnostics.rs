@@ -126,7 +126,13 @@ pub struct RuntimeMetrics {
 
 impl RuntimeMetrics {
     #[cfg(target_os = "espidf")]
-    pub fn collect(uptime_secs: u64, control_cycles: u64, fault_count: u32, crash_count: u32, ulp_wakes: u32) -> Self {
+    pub fn collect(
+        uptime_secs: u64,
+        control_cycles: u64,
+        fault_count: u32,
+        crash_count: u32,
+        ulp_wakes: u32,
+    ) -> Self {
         use esp_idf_svc::sys::*;
         let heap_free = unsafe { esp_get_free_heap_size() };
         let heap_min = unsafe { esp_get_minimum_free_heap_size() };
@@ -161,11 +167,21 @@ impl RuntimeMetrics {
         let mut stats: nvs_stats_t = unsafe { core::mem::zeroed() };
         let part_name = b"nvs\0";
         let ret = unsafe { nvs_get_stats(part_name.as_ptr() as *const _, &mut stats) };
-        if ret == ESP_OK { stats.free_entries as u32 } else { 0 }
+        if ret == ESP_OK {
+            stats.free_entries as u32
+        } else {
+            0
+        }
     }
 
     #[cfg(not(target_os = "espidf"))]
-    pub fn collect(uptime_secs: u64, control_cycles: u64, fault_count: u32, crash_count: u32, ulp_wakes: u32) -> Self {
+    pub fn collect(
+        uptime_secs: u64,
+        control_cycles: u64,
+        fault_count: u32,
+        crash_count: u32,
+        ulp_wakes: u32,
+    ) -> Self {
         // Return realistic synthetic values so simulation paths exercise
         // the same code branches as real hardware.
         // Heap "decays" slightly over time to model fragmentation.
@@ -239,4 +255,120 @@ pub fn install_panic_handler() {
             log::error!("Crash entry (simulation): {}", reason);
         }
     }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::ports::{StorageError, StoragePort};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    struct MockStorage {
+        data: RefCell<HashMap<String, Vec<u8>>>,
+    }
+
+    impl MockStorage {
+        fn new() -> Self {
+            Self {
+                data: RefCell::new(HashMap::new()),
+            }
+        }
+    }
+
+    impl StoragePort for MockStorage {
+        fn read(&self, ns: &str, key: &str, buf: &mut [u8]) -> Result<usize, StorageError> {
+            let k = format!("{ns}::{key}");
+            match self.data.borrow().get(&k) {
+                Some(v) => {
+                    let len = v.len().min(buf.len());
+                    buf[..len].copy_from_slice(&v[..len]);
+                    Ok(len)
+                }
+                None => Err(StorageError::NotFound),
+            }
+        }
+
+        fn write(&mut self, ns: &str, key: &str, data: &[u8]) -> Result<(), StorageError> {
+            let k = format!("{ns}::{key}");
+            self.data.borrow_mut().insert(k, data.to_vec());
+            Ok(())
+        }
+
+        fn delete(&mut self, ns: &str, key: &str) -> Result<(), StorageError> {
+            let k = format!("{ns}::{key}");
+            self.data.borrow_mut().remove(&k);
+            Ok(())
+        }
+
+        fn exists(&self, ns: &str, key: &str) -> bool {
+            let k = format!("{ns}::{key}");
+            self.data.borrow().contains_key(&k)
+        }
+    }
+
+    #[test]
+    fn crash_log_starts_at_zero() {
+        let log = CrashLog::new();
+        assert_eq!(log.write_index, 0);
+    }
+
+    #[test]
+    fn write_and_read_single_entry() {
+        let mut nvs = MockStorage::new();
+        let mut log = CrashLog::new();
+        let entry = CrashEntry::new(42, "test panic", 0xDEAD);
+
+        log.write_entry(&mut nvs, &entry);
+        let entries = log.read_all(&nvs);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].uptime_secs, 42);
+        assert_eq!(entries[0].pc, 0xDEAD);
+    }
+
+    #[test]
+    fn ring_buffer_wraps() {
+        let mut nvs = MockStorage::new();
+        let mut log = CrashLog::new();
+
+        for i in 0..6 {
+            let entry = CrashEntry::new(i as u64, &format!("crash_{i}"), i as u32);
+            log.write_entry(&mut nvs, &entry);
+        }
+        let entries = log.read_all(&nvs);
+        assert_eq!(entries.len(), CRASH_RING_SLOTS);
+    }
+
+    #[test]
+    fn clear_erases_all() {
+        let mut nvs = MockStorage::new();
+        let mut log = CrashLog::new();
+
+        log.write_entry(&mut nvs, &CrashEntry::new(1, "x", 0));
+        log.write_entry(&mut nvs, &CrashEntry::new(2, "y", 0));
+        log.clear(&mut nvs);
+
+        let entries = log.read_all(&nvs);
+        assert_eq!(entries.len(), 0);
+        assert_eq!(log.write_index, 0);
+    }
+
+    #[test]
+    fn crash_entry_truncates_long_reason() {
+        let long = "a".repeat(200);
+        let entry = CrashEntry::new(0, &long, 0);
+        assert!(entry.reason.len() <= 63);
+    }
+
+    #[test]
+    fn count_matches_entries() {
+        let mut nvs = MockStorage::new();
+        let mut log = CrashLog::new();
+
+        assert_eq!(log.count(&nvs), 0);
+        log.write_entry(&mut nvs, &CrashEntry::new(1, "a", 0));
+        assert_eq!(log.count(&nvs), 1);
+        log.write_entry(&mut nvs, &CrashEntry::new(2, "b", 0));
+        assert_eq!(log.count(&nvs), 2);
+    }
 }

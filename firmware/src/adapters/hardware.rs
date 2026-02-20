@@ -21,12 +21,7 @@ pub struct HardwareAdapter {
 }
 
 impl HardwareAdapter {
-    pub fn new(
-        sensor_hub: SensorHub,
-        pump: PumpDriver,
-        uvc: UvcDriver,
-        led: StatusLed,
-    ) -> Self {
+    pub fn new(sensor_hub: SensorHub, pump: PumpDriver, uvc: UvcDriver, led: StatusLed) -> Self {
         Self {
             sensor_hub,
             pump,

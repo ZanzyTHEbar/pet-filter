@@ -10,18 +10,21 @@
 //! |                | StoragePort        |                          |
 //! | `rpc_adapter`  | EventSink          | FlatBuffers RPC transport|
 //! | `time`         | TimePort           | ESP32 system timer       |
-//! | `tls_transport`| Transport          | TCP + TLS 1.3 (PSK)     |
+//! | `tls_transport`| Transport          | TCP + TLS 1.3 (PSK/X509)|
+//! | `cert_store`   | CertStore          | X.509 cert flash store  |
 //! | `wifi`         | ConnectivityPort   | ESP-IDF WiFi STA         |
 //! |                | EventSink          | Network event forwarding |
 
 pub mod ble;
+pub mod ble_transport;
+pub mod cert_store;
+pub mod device_id;
 pub mod hardware;
 pub mod log_sink;
+pub mod mdns;
 pub mod nvs;
 pub mod rpc_adapter;
 pub mod time;
 pub mod tls_transport;
-pub mod wifi;
-pub mod mdns;
-pub mod device_id;
 pub(super) mod utils;
+pub mod wifi;

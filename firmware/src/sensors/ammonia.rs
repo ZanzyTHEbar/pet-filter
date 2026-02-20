@@ -11,8 +11,6 @@
 
 use core::sync::atomic::{AtomicU16, Ordering};
 
-use crate::drivers::hw_init;
-
 static SIM_NH3_ADC: AtomicU16 = AtomicU16::new(0);
 
 #[cfg(not(target_os = "espidf"))]

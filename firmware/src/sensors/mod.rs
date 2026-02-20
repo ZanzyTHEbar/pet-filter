@@ -10,7 +10,6 @@ pub mod water_level;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use crate::error::{Error, SensorError};
 use crate::fsm::context::SensorSnapshot;
 use ammonia::AmmoniaSensor;
 use flow::FlowSensor;
@@ -29,6 +28,7 @@ pub fn set_interlock_from_isr(closed: bool) {
 }
 
 /// Aggregates all sensor drivers and produces a unified snapshot.
+#[allow(dead_code)]
 pub struct SensorHub {
     pub ammonia: AmmoniaSensor,
     pub flow: FlowSensor,

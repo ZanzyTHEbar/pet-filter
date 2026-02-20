@@ -1,8 +1,13 @@
 //! RPC engine — dispatches incoming FlatBuffer messages to the AppService.
 //!
+//! **Transport-decoupled**: the engine does not own a transport. Instead,
+//! callers feed `(client_id, frame_bytes)` via [`dispatch`] and receive
+//! serialized response frames. The I/O task (Phase 2) bridges the transport
+//! layer to this engine via channels.
+//!
 //! All messages pass through a three-gate pipeline:
 //!
-//! 1. **Rate limiting** — token-bucket rejects bursts above 60 req/min.
+//! 1. **Rate limiting** — token-bucket rejects bursts (via `burster`).
 //! 2. **Authentication gate** — only `GetDeviceInfo` and auth handshake
 //!    messages are allowed before a session is authenticated.
 //! 3. **Sequence check** — monotonically increasing `msg.id()` prevents
@@ -16,57 +21,60 @@ use crate::app::commands::AppCommand;
 use crate::app::ports::{ActuatorPort, EventSink, StoragePort};
 use crate::app::service::AppService;
 use crate::diagnostics::CrashLog;
-use crate::events::{push_event, Event};
+use crate::events::{Event, push_event};
 use crate::fsm::StateId;
 
-use super::auth::Session;
-use super::codec::{encode_frame, FrameDecoder};
+use super::auth::{ClientId, MAX_CLIENTS, SessionTable};
+use super::codec::{FrameDecoder, encode_frame};
 use super::fb;
 use super::ota::OtaManager;
-use super::transport::Transport;
+use crate::adapters::cert_store::{CertStore, TlsMode as CertTlsMode};
 
-/// RPC engine — generic over the byte-oriented transport.
-pub struct RpcEngine<T: Transport> {
-    transport: T,
-    decoder: FrameDecoder,
-    write_buf: [u8; 512],
-    session: Session,
+/// Response frame produced by the engine, tagged with destination client.
+pub struct ResponseFrame {
+    pub client_id: ClientId,
+    pub data: heapless::Vec<u8, 512>,
+}
+
+/// Transport-decoupled RPC engine with multi-client session table.
+pub struct RpcEngine {
+    sessions: SessionTable,
+    decoders: [FrameDecoder; MAX_CLIENTS],
     psk: [u8; 32],
     psk_len: usize,
-    telemetry_subscribed: bool,
-    telemetry_interval_ms: u32,
-    telemetry_tick_counter: u32,
+    telemetry_subscribed: [bool; MAX_CLIENTS],
+    telemetry_interval_ms: [u32; MAX_CLIENTS],
+    telemetry_tick_counter: [u32; MAX_CLIENTS],
     next_msg_id: u32,
     ota: OtaManager,
     ulp_wake_count: u32,
     crash_log: CrashLog,
+    cert_store: CertStore,
 }
 
-impl<T: Transport> RpcEngine<T> {
-    pub fn new(transport: T, psk: &[u8]) -> Self {
+impl RpcEngine {
+    pub fn new(psk: &[u8]) -> Self {
         let mut psk_buf = [0u8; 32];
         let psk_len = psk.len().min(32);
         psk_buf[..psk_len].copy_from_slice(&psk[..psk_len]);
 
         Self {
-            transport,
-            decoder: FrameDecoder::new(),
-            write_buf: [0; 512],
-            session: Session::new(),
+            sessions: SessionTable::new(),
+            decoders: core::array::from_fn(|_| FrameDecoder::new()),
             psk: psk_buf,
             psk_len,
-            telemetry_subscribed: false,
-            telemetry_interval_ms: 1000,
-            telemetry_tick_counter: 0,
+            telemetry_subscribed: [false; MAX_CLIENTS],
+            telemetry_interval_ms: [1000; MAX_CLIENTS],
+            telemetry_tick_counter: [0; MAX_CLIENTS],
             next_msg_id: 1,
             ota: OtaManager::new(),
             ulp_wake_count: 0,
             crash_log: CrashLog::new(),
+            cert_store: CertStore::new(CertTlsMode::PskOnly),
         }
     }
 
     /// Initialise the crash log from persistent NVS storage.
-    /// Call once after NVS is ready in main().
     pub fn init_crash_log(&mut self, nvs: &dyn StoragePort) {
         self.crash_log.init(nvs);
     }
@@ -77,50 +85,56 @@ impl<T: Transport> RpcEngine<T> {
         id
     }
 
-    /// Poll the transport for incoming data and dispatch complete messages.
-    pub fn poll(
+    /// Feed raw bytes from a client into the decoder and dispatch any
+    /// complete frames. Returns a response frame if one was generated.
+    pub fn feed_bytes(
         &mut self,
+        client_id: ClientId,
+        data: &[u8],
         app: &mut AppService,
         hw: &mut impl ActuatorPort,
         sink: &mut impl EventSink,
         nvs: &mut dyn StoragePort,
-    ) {
-        let mut read_buf = [0u8; 512];
-        let n = match self.transport.read(&mut read_buf) {
-            Ok(n) if n > 0 => n,
-            _ => return,
-        };
+    ) -> Option<ResponseFrame> {
+        let idx = client_id as usize;
+        if idx >= MAX_CLIENTS {
+            return None;
+        }
 
-        if let Some(frame) = self.decoder.feed(&read_buf[..n]) {
-            let mut frame_copy = [0u8; 512];
+        if let Some(frame) = self.decoders[idx].feed(data) {
+            let mut frame_copy = [0u8; 4096];
             let frame_len = frame.len().min(frame_copy.len());
             frame_copy[..frame_len].copy_from_slice(&frame[..frame_len]);
-            self.dispatch_frame(&frame_copy[..frame_len], app, hw, sink, nvs);
+            return self.dispatch_frame(client_id, &frame_copy[..frame_len], app, hw, sink, nvs);
         }
+        None
     }
 
-    /// Tick periodic maintenance: telemetry streaming + rate-limit token refill.
-    pub fn tick(&mut self, tick_ms: u32) {
-        let elapsed_secs = tick_ms as f32 / 1000.0;
-        self.session.refill_rate_limit(elapsed_secs);
+    /// Dispatch a complete frame from a specific client. Returns the
+    /// serialized response frame (if any).
+    pub fn dispatch(
+        &mut self,
+        client_id: ClientId,
+        frame: &[u8],
+        app: &mut AppService,
+        hw: &mut impl ActuatorPort,
+        sink: &mut impl EventSink,
+        nvs: &mut dyn StoragePort,
+    ) -> Option<ResponseFrame> {
+        self.dispatch_frame(client_id, frame, app, hw, sink, nvs)
     }
 
-    /// Returns `true` if a telemetry frame should be streamed this tick.
-    pub fn should_stream_telemetry(&mut self, tick_ms: u32) -> bool {
-        if !self.telemetry_subscribed || self.telemetry_interval_ms == 0 {
-            return false;
+    /// Build a telemetry frame for a specific client (if subscribed).
+    pub fn build_telemetry_frame(
+        &mut self,
+        client_id: ClientId,
+        app: &AppService,
+    ) -> Option<ResponseFrame> {
+        let idx = client_id as usize;
+        if idx >= MAX_CLIENTS || !self.telemetry_subscribed[idx] {
+            return None;
         }
-        self.telemetry_tick_counter += tick_ms;
-        if self.telemetry_tick_counter >= self.telemetry_interval_ms {
-            self.telemetry_tick_counter = 0;
-            true
-        } else {
-            false
-        }
-    }
 
-    /// Send a telemetry frame to the connected client.
-    pub fn send_telemetry(&mut self, app: &AppService) {
         let telem = app.build_telemetry();
         let mut fbb = FlatBufferBuilder::with_capacity(256);
 
@@ -149,11 +163,34 @@ impl<T: Transport> RpcEngine<T> {
         );
 
         fbb.finish(msg, None);
-        self.send_finished(&fbb);
+        self.encode_response(client_id, &fbb)
     }
 
-    /// Send a state-change event frame.
-    pub fn send_state_change(&mut self, from: StateId, to: StateId) {
+    /// Check if a client's telemetry timer has elapsed.
+    pub fn should_stream_telemetry(&mut self, client_id: ClientId, tick_ms: u32) -> bool {
+        let idx = client_id as usize;
+        if idx >= MAX_CLIENTS
+            || !self.telemetry_subscribed[idx]
+            || self.telemetry_interval_ms[idx] == 0
+        {
+            return false;
+        }
+        self.telemetry_tick_counter[idx] += tick_ms;
+        if self.telemetry_tick_counter[idx] >= self.telemetry_interval_ms[idx] {
+            self.telemetry_tick_counter[idx] = 0;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Build a state-change event frame for broadcast.
+    pub fn build_state_change_frame(
+        &mut self,
+        client_id: ClientId,
+        from: StateId,
+        to: StateId,
+    ) -> Option<ResponseFrame> {
         let mut fbb = FlatBufferBuilder::with_capacity(64);
 
         let sc = fb::StateChangeEvent::create(
@@ -175,11 +212,7 @@ impl<T: Transport> RpcEngine<T> {
         );
 
         fbb.finish(msg, None);
-        self.send_finished(&fbb);
-    }
-
-    pub fn transport_mut(&mut self) -> &mut T {
-        &mut self.transport
+        self.encode_response(client_id, &fbb)
     }
 
     pub fn increment_ulp_wakes(&mut self) {
@@ -190,105 +223,126 @@ impl<T: Transport> RpcEngine<T> {
         &mut self.ota
     }
 
-    pub fn session(&self) -> &Session {
-        &self.session
+    pub fn sessions(&self) -> &SessionTable {
+        &self.sessions
     }
 
-    /// Reset the session (e.g. on transport disconnect).
-    pub fn reset_session(&mut self) {
-        self.session.reset();
-        self.telemetry_subscribed = false;
+    /// Reset a client's session and telemetry state (e.g. on disconnect).
+    pub fn reset_client(&mut self, client_id: ClientId) {
+        let idx = client_id as usize;
+        self.sessions.reset_client(client_id);
+        if idx < MAX_CLIENTS {
+            self.telemetry_subscribed[idx] = false;
+            self.telemetry_tick_counter[idx] = 0;
+            self.decoders[idx].reset();
+        }
     }
 
     // ── Internal dispatch ─────────────────────────────────────
 
     fn dispatch_frame(
         &mut self,
+        client_id: ClientId,
         frame: &[u8],
         app: &mut AppService,
         hw: &mut impl ActuatorPort,
         sink: &mut impl EventSink,
         nvs: &mut dyn StoragePort,
-    ) {
+    ) -> Option<ResponseFrame> {
         let msg = match flatbuffers::root::<fb::Message>(frame) {
             Ok(m) => m,
             Err(e) => {
-                warn!("RPC: invalid FlatBuffer: {:?}", e);
-                return;
+                warn!("RPC[{}]: invalid FlatBuffer: {:?}", client_id, e);
+                return None;
             }
         };
 
         let reply_to = msg.id();
         let payload_type = msg.payload_type();
 
+        let session = self.sessions.get_mut(client_id)?;
+
         // ── Gate 1: Rate limiting ─────────────────────────────
-        if !self.session.check_rate_limit() {
-            warn!("RPC: rate limit exceeded");
-            self.send_ack(reply_to, false, "rate limit exceeded");
-            return;
+        if !session.check_rate_limit() {
+            warn!("RPC[{}]: rate limit exceeded", client_id);
+            return self.build_ack(client_id, reply_to, false, "rate limit exceeded");
         }
 
         // ── Gate 2: Public messages (no auth required) ────────
         match payload_type {
             fb::Payload::AuthChallengeRequest => {
-                return self.handle_auth_challenge(reply_to);
+                return self.handle_auth_challenge(client_id, reply_to);
             }
             fb::Payload::AuthVerifyRequest => {
                 if let Some(req) = msg.payload_as_auth_verify_request() {
-                    return self.handle_auth_verify(reply_to, req.session_id(), req.hmac());
+                    return self.handle_auth_verify(
+                        client_id,
+                        reply_to,
+                        req.session_id(),
+                        req.hmac(),
+                    );
                 }
-                return;
+                return None;
             }
             fb::Payload::GetDeviceInfoRequest => {
-                info!("RPC: GetDeviceInfo");
-                return self.send_device_info(reply_to);
+                info!("RPC[{}]: GetDeviceInfo", client_id);
+                return self.build_device_info(client_id, reply_to);
             }
             _ => {}
         }
 
+        // Re-borrow session after the match consumed it
+        let session = self.sessions.get_mut(client_id)?;
+
         // ── Gate 3: Authentication required ───────────────────
-        if !self.session.is_authenticated() {
-            warn!("RPC: unauthenticated request (type {:?})", payload_type);
-            self.send_ack(reply_to, false, "authentication required");
-            return;
+        if !session.is_authenticated() {
+            warn!(
+                "RPC[{}]: unauthenticated request (type {:?})",
+                client_id, payload_type
+            );
+            return self.build_ack(client_id, reply_to, false, "authentication required");
         }
 
         // ── Gate 4: Sequence monotonicity ─────────────────────
-        if !self.session.check_sequence(reply_to) {
-            warn!("RPC: sequence check failed (msg_id={})", reply_to);
-            self.send_ack(reply_to, false, "sequence check failed");
-            return;
+        if !session.check_sequence(reply_to) {
+            warn!(
+                "RPC[{}]: sequence check failed (msg_id={})",
+                client_id, reply_to
+            );
+            return self.build_ack(client_id, reply_to, false, "sequence check failed");
         }
 
         // ── Authenticated command dispatch ────────────────────
+        let idx = client_id as usize;
         match payload_type {
             fb::Payload::GetStatusRequest => {
-                info!("RPC: GetStatus");
-                self.send_status(app, reply_to);
+                info!("RPC[{}]: GetStatus", client_id);
+                self.build_status(client_id, app, reply_to)
             }
 
             fb::Payload::StartScrubRequest => {
-                info!("RPC: StartScrub");
+                info!("RPC[{}]: StartScrub", client_id);
                 app.handle_command(AppCommand::StartScrub, hw, sink);
-                self.send_ack(reply_to, true, "scrub started");
+                self.build_ack(client_id, reply_to, true, "scrub started")
             }
 
             fb::Payload::StopScrubRequest => {
-                info!("RPC: StopScrub");
+                info!("RPC[{}]: StopScrub", client_id);
                 app.handle_command(AppCommand::ForceState(StateId::Idle), hw, sink);
-                self.send_ack(reply_to, true, "stopped");
+                self.build_ack(client_id, reply_to, true, "stopped")
             }
 
             fb::Payload::ClearFaultsRequest => {
-                info!("RPC: ClearFaults");
+                info!("RPC[{}]: ClearFaults", client_id);
                 push_event(Event::CommandReceived);
-                self.send_ack(reply_to, true, "faults clear requested");
+                self.build_ack(client_id, reply_to, true, "faults clear requested")
             }
 
             fb::Payload::SetConfigRequest => {
                 if let Some(cfg) = msg.payload_as_set_config_request() {
                     info!(
-                        "RPC: SetConfig (nh3_act={:.1}, nh3_deact={:.1}, pump={}%, uvc={}%, purge={}s)",
+                        "RPC[{}]: SetConfig (nh3_act={:.1}, nh3_deact={:.1}, pump={}%, uvc={}%, purge={}s)",
+                        client_id,
                         cfg.nh3_activate_ppm(),
                         cfg.nh3_deactivate_ppm(),
                         cfg.pump_duty_percent(),
@@ -302,117 +356,168 @@ impl<T: Transport> RpcEngine<T> {
                     new_config.uvc_duty_percent = cfg.uvc_duty_percent();
                     new_config.purge_duration_secs = cfg.purge_duration_secs();
                     app.handle_command(AppCommand::UpdateConfig(new_config), hw, sink);
-                    self.send_ack(reply_to, true, "config updated");
+                    self.build_ack(client_id, reply_to, true, "config updated")
+                } else {
+                    None
                 }
             }
 
             fb::Payload::SetScheduleRequest => {
                 if let Some(sched) = msg.payload_as_set_schedule_request() {
                     info!(
-                        "RPC: SetSchedule interval={}s duration={}s quiet={}-{}",
+                        "RPC[{}]: SetSchedule interval={}s duration={}s quiet={}-{}",
+                        client_id,
                         sched.interval_secs(),
                         sched.duration_secs(),
                         sched.quiet_start_hour(),
                         sched.quiet_end_hour(),
                     );
                     push_event(Event::CommandReceived);
-                    self.send_ack(reply_to, true, "schedule set");
+                    self.build_ack(client_id, reply_to, true, "schedule set")
+                } else {
+                    None
                 }
             }
 
             fb::Payload::CancelScheduleRequest => {
-                info!("RPC: CancelSchedule");
+                info!("RPC[{}]: CancelSchedule", client_id);
                 push_event(Event::CommandReceived);
-                self.send_ack(reply_to, true, "schedule cancelled");
+                self.build_ack(client_id, reply_to, true, "schedule cancelled")
             }
 
             fb::Payload::SubscribeTelemetryRequest => {
                 if let Some(sub) = msg.payload_as_subscribe_telemetry_request() {
-                    self.telemetry_subscribed = true;
-                    self.telemetry_interval_ms = sub.interval_ms();
+                    if idx < MAX_CLIENTS {
+                        self.telemetry_subscribed[idx] = true;
+                        self.telemetry_interval_ms[idx] = sub.interval_ms();
+                    }
                     info!(
-                        "RPC: telemetry ON (interval={}ms)",
-                        self.telemetry_interval_ms
+                        "RPC[{}]: telemetry ON (interval={}ms)",
+                        client_id,
+                        sub.interval_ms()
                     );
-                    self.send_ack(reply_to, true, "subscribed");
+                    self.build_ack(client_id, reply_to, true, "subscribed")
+                } else {
+                    None
                 }
             }
 
             fb::Payload::UnsubscribeTelemetryRequest => {
-                self.telemetry_subscribed = false;
-                info!("RPC: telemetry OFF");
-                self.send_ack(reply_to, true, "unsubscribed");
+                if idx < MAX_CLIENTS {
+                    self.telemetry_subscribed[idx] = false;
+                }
+                info!("RPC[{}]: telemetry OFF", client_id);
+                self.build_ack(client_id, reply_to, true, "unsubscribed")
             }
 
             // ── OTA ────────────────────────────────────────────
             fb::Payload::OtaBeginRequest => {
                 if let Some(req) = msg.payload_as_ota_begin_request() {
-                    let sha = req.sha256().map(|v| v.bytes()).unwrap_or(&[]);
+                    let sha = req.sha256().map_or(&[] as &[u8], |v| v.bytes());
                     match self.ota.begin(req.firmware_size(), sha) {
-                        Ok(()) => self.send_ack(reply_to, true, "OTA started"),
+                        Ok(()) => self.build_ack(client_id, reply_to, true, "OTA started"),
                         Err(e) => {
                             let mut buf = heapless::String::<64>::new();
                             let _ = core::fmt::Write::write_fmt(&mut buf, format_args!("{}", e));
-                            self.send_ack(reply_to, false, buf.as_str());
+                            self.build_ack(client_id, reply_to, false, buf.as_str())
                         }
                     }
+                } else {
+                    None
                 }
             }
 
             fb::Payload::OtaChunkRequest => {
                 if let Some(req) = msg.payload_as_ota_chunk_request() {
-                    let data = req.data().map(|v| v.bytes()).unwrap_or(&[]);
+                    let data = req.data().map_or(&[] as &[u8], |v| v.bytes());
                     match self.ota.write_chunk(req.offset(), data) {
                         Ok(written) => {
-                            self.send_ota_progress(reply_to, true, written);
+                            let total = match self.ota.state() {
+                                super::ota::OtaState::Receiving { expected_size, .. } => {
+                                    expected_size
+                                }
+                                _ => 0,
+                            };
+                            if let Some(evt) =
+                                self.build_ota_progress_event(client_id, written, total)
+                            {
+                                super::io_task::send_response(evt.client_id, evt.data);
+                            }
+                            self.build_ota_progress(client_id, reply_to, true, written)
                         }
                         Err(e) => {
                             let mut buf = heapless::String::<64>::new();
                             let _ = core::fmt::Write::write_fmt(&mut buf, format_args!("{}", e));
-                            self.send_ack(reply_to, false, buf.as_str());
+                            self.build_ack(client_id, reply_to, false, buf.as_str())
                         }
                     }
+                } else {
+                    None
                 }
             }
 
-            fb::Payload::OtaFinalizeRequest => {
-                match self.ota.finalize() {
-                    Ok(()) => {
-                        self.send_ack(reply_to, true, "OTA finalized, rebooting");
-                        self.ota.reboot();
-                    }
-                    Err(e) => {
-                        let mut buf = heapless::String::<64>::new();
-                        let _ = core::fmt::Write::write_fmt(&mut buf, format_args!("{}", e));
-                        self.send_ack(reply_to, false, buf.as_str());
-                    }
+            fb::Payload::OtaFinalizeRequest => match self.ota.finalize() {
+                Ok(()) => {
+                    #[allow(unused_variables)]
+                    let resp =
+                        self.build_ack(client_id, reply_to, true, "OTA finalized, rebooting");
+                    self.ota.reboot();
+                    #[allow(unreachable_code)]
+                    resp
                 }
-            }
+                Err(e) => {
+                    let mut buf = heapless::String::<64>::new();
+                    let _ = core::fmt::Write::write_fmt(&mut buf, format_args!("{}", e));
+                    self.build_ack(client_id, reply_to, false, buf.as_str())
+                }
+            },
 
             // ── Diagnostics ───────────────────────────────────
             fb::Payload::GetDiagnosticsRequest => {
-                info!("RPC: GetDiagnostics");
-                self.send_diagnostics(app, reply_to, nvs);
+                info!("RPC[{}]: GetDiagnostics", client_id);
+                self.build_diagnostics(client_id, app, reply_to, nvs)
             }
 
             fb::Payload::ClearDiagnosticsRequest => {
-                info!("RPC: ClearDiagnostics");
+                info!("RPC[{}]: ClearDiagnostics", client_id);
                 self.crash_log.clear(nvs);
-                self.send_ack(reply_to, true, "crash log cleared");
+                self.build_ack(client_id, reply_to, true, "crash log cleared")
+            }
+
+            fb::Payload::ProvisionCertRequest => {
+                info!("RPC[{}]: ProvisionCert", client_id);
+                if let Some(req) = msg.payload_as_provision_cert_request() {
+                    self.handle_provision_cert(client_id, reply_to, req)
+                } else {
+                    self.build_ack(client_id, reply_to, false, "malformed ProvisionCertRequest")
+                }
+            }
+
+            fb::Payload::GetCertStatusRequest => {
+                info!("RPC[{}]: GetCertStatus", client_id);
+                self.build_cert_status(client_id, reply_to)
             }
 
             other => {
-                warn!("RPC: unhandled payload type {:?}", other);
-                self.send_ack(reply_to, false, "unknown command");
+                warn!("RPC[{}]: unhandled payload type {:?}", client_id, other);
+                self.build_ack(client_id, reply_to, false, "unknown command")
             }
         }
     }
 
     // ── Auth handlers ─────────────────────────────────────────
 
-    fn handle_auth_challenge(&mut self, reply_to: u32) {
-        let (session_id, nonce) = self.session.begin_challenge();
-        info!("RPC: AuthChallenge → session_id={session_id}");
+    fn handle_auth_challenge(
+        &mut self,
+        client_id: ClientId,
+        reply_to: u32,
+    ) -> Option<ResponseFrame> {
+        let session = self.sessions.get_mut(client_id)?;
+        let (session_id, nonce) = session.begin_challenge();
+        info!(
+            "RPC[{}]: AuthChallenge -> session_id={session_id}",
+            client_id
+        );
 
         let mut fbb = FlatBufferBuilder::with_capacity(128);
         let nonce_vec = fbb.create_vector(&nonce);
@@ -435,36 +540,49 @@ impl<T: Transport> RpcEngine<T> {
         );
 
         fbb.finish(msg, None);
-        self.send_finished(&fbb);
+        self.encode_response(client_id, &fbb)
     }
 
     fn handle_auth_verify(
         &mut self,
+        client_id: ClientId,
         reply_to: u32,
         session_id: u32,
         hmac: Option<flatbuffers::Vector<'_, u8>>,
-    ) {
+    ) -> Option<ResponseFrame> {
         let hmac_bytes = match hmac {
             Some(v) => v.bytes(),
             None => {
-                self.send_auth_verify_response(reply_to, false, "missing HMAC");
-                return;
+                return self.build_auth_verify_response(client_id, reply_to, false, "missing HMAC");
             }
         };
 
         let psk = &self.psk[..self.psk_len];
-        let success = self.session.verify_response(session_id, hmac_bytes, psk);
+        let session = self.sessions.get_mut(client_id)?;
+        let success = session.verify_response(session_id, hmac_bytes, psk);
 
         if success {
-            info!("RPC: AuthVerify SUCCESS (session_id={session_id})");
-            self.send_auth_verify_response(reply_to, true, "authenticated");
+            info!(
+                "RPC[{}]: AuthVerify SUCCESS (session_id={session_id})",
+                client_id
+            );
+            self.build_auth_verify_response(client_id, reply_to, true, "authenticated")
         } else {
-            warn!("RPC: AuthVerify FAILED (session_id={session_id})");
-            self.send_auth_verify_response(reply_to, false, "verification failed");
+            warn!(
+                "RPC[{}]: AuthVerify FAILED (session_id={session_id})",
+                client_id
+            );
+            self.build_auth_verify_response(client_id, reply_to, false, "verification failed")
         }
     }
 
-    fn send_auth_verify_response(&mut self, reply_to: u32, success: bool, message: &str) {
+    fn build_auth_verify_response(
+        &mut self,
+        client_id: ClientId,
+        reply_to: u32,
+        success: bool,
+        message: &str,
+    ) -> Option<ResponseFrame> {
         let mut fbb = FlatBufferBuilder::with_capacity(128);
         let msg_str = fbb.create_string(message);
 
@@ -486,12 +604,17 @@ impl<T: Transport> RpcEngine<T> {
         );
 
         fbb.finish(msg, None);
-        self.send_finished(&fbb);
+        self.encode_response(client_id, &fbb)
     }
 
     // ── Response builders ─────────────────────────────────────
 
-    fn send_status(&mut self, app: &AppService, reply_to: u32) {
+    fn build_status(
+        &mut self,
+        client_id: ClientId,
+        app: &AppService,
+        reply_to: u32,
+    ) -> Option<ResponseFrame> {
         let telem = app.build_telemetry();
         let mut fbb = FlatBufferBuilder::with_capacity(128);
 
@@ -522,15 +645,23 @@ impl<T: Transport> RpcEngine<T> {
         );
 
         fbb.finish(msg, None);
-        self.send_finished(&fbb);
+        self.encode_response(client_id, &fbb)
     }
 
-    fn send_device_info(&mut self, reply_to: u32) {
+    fn build_device_info(&mut self, client_id: ClientId, reply_to: u32) -> Option<ResponseFrame> {
         let mut fbb = FlatBufferBuilder::with_capacity(128);
 
         let ver = fbb.create_string(env!("CARGO_PKG_VERSION"));
         let hw_rev = fbb.create_string("ESP32-S3-WROOM-1");
-        let serial = fbb.create_string("PF-000000");
+        let mac = crate::adapters::device_id::read_mac();
+        let serial_str = crate::adapters::device_id::device_id(&mac);
+        let serial = fbb.create_string(serial_str.as_str());
+
+        let has_certs = self.cert_store.mode() != CertTlsMode::PskOnly;
+        let caps: u32 = (1 << 0)  // compression supported
+                      | (1 << 1)  // chunked transfer supported
+                      | (if has_certs { 1 << 2 } else { 0 })  // cert_auth
+                      | (1 << 3); // multi_client
 
         let di = fb::DeviceInfoResponse::create(
             &mut fbb,
@@ -539,6 +670,8 @@ impl<T: Transport> RpcEngine<T> {
                 hardware_revision: Some(hw_rev),
                 serial_number: Some(serial),
                 uptime_secs: 0,
+                capabilities: caps,
+                max_clients: MAX_CLIENTS as u8,
             },
         );
 
@@ -552,10 +685,16 @@ impl<T: Transport> RpcEngine<T> {
         );
 
         fbb.finish(msg, None);
-        self.send_finished(&fbb);
+        self.encode_response(client_id, &fbb)
     }
 
-    fn send_ack(&mut self, reply_to: u32, success: bool, message: &str) {
+    fn build_ack(
+        &mut self,
+        client_id: ClientId,
+        reply_to: u32,
+        success: bool,
+        message: &str,
+    ) -> Option<ResponseFrame> {
         let mut fbb = FlatBufferBuilder::with_capacity(128);
 
         let msg_str = fbb.create_string(message);
@@ -577,18 +716,16 @@ impl<T: Transport> RpcEngine<T> {
         );
 
         fbb.finish(msg, None);
-        self.send_finished(&fbb);
+        self.encode_response(client_id, &fbb)
     }
 
-    fn send_finished(&mut self, fbb: &FlatBufferBuilder<'_>) {
-        let data = fbb.finished_data();
-        if let Some(len) = encode_frame(data, &mut self.write_buf) {
-            let _ = self.transport.write(&self.write_buf[..len]);
-            let _ = self.transport.flush();
-        }
-    }
-
-    fn send_ota_progress(&mut self, reply_to: u32, success: bool, bytes_written: u32) {
+    fn build_ota_progress(
+        &mut self,
+        client_id: ClientId,
+        reply_to: u32,
+        success: bool,
+        bytes_written: u32,
+    ) -> Option<ResponseFrame> {
         let mut fbb = FlatBufferBuilder::with_capacity(64);
         let msg_str = fbb.create_string("chunk written");
 
@@ -611,10 +748,16 @@ impl<T: Transport> RpcEngine<T> {
         );
 
         fbb.finish(msg, None);
-        self.send_finished(&fbb);
+        self.encode_response(client_id, &fbb)
     }
 
-    fn send_diagnostics(&mut self, app: &AppService, reply_to: u32, nvs: &dyn StoragePort) {
+    fn build_diagnostics(
+        &mut self,
+        client_id: ClientId,
+        app: &AppService,
+        reply_to: u32,
+        nvs: &dyn StoragePort,
+    ) -> Option<ResponseFrame> {
         let time_adapter = crate::adapters::time::Esp32TimeAdapter::new();
         let uptime_secs = time_adapter.uptime_us() / 1_000_000;
 
@@ -674,6 +817,128 @@ impl<T: Transport> RpcEngine<T> {
         );
 
         fbb.finish(msg, None);
-        self.send_finished(&fbb);
+        self.encode_response(client_id, &fbb)
+    }
+
+    // ── Cert provisioning handlers ────────────────────────────
+
+    fn handle_provision_cert(
+        &mut self,
+        client_id: ClientId,
+        reply_to: u32,
+        req: fb::ProvisionCertRequest<'_>,
+    ) -> Option<ResponseFrame> {
+        let ca = req.ca_cert().unwrap_or_default().bytes();
+        let cert = req.device_cert().unwrap_or_default().bytes();
+        let key = req.device_key().unwrap_or_default().bytes();
+
+        if ca.is_empty() || cert.is_empty() || key.is_empty() {
+            return self.build_ack(client_id, reply_to, false, "incomplete certificate bundle");
+        }
+
+        if let Err(e) = self.cert_store.store_cert("ca_cert", ca) {
+            warn!("RPC[{}]: cert store CA failed: {}", client_id, e);
+            return self.build_ack(client_id, reply_to, false, "failed to store CA cert");
+        }
+        if let Err(e) = self.cert_store.store_cert("server_cert", cert) {
+            warn!("RPC[{}]: cert store cert failed: {}", client_id, e);
+            return self.build_ack(client_id, reply_to, false, "failed to store device cert");
+        }
+        if let Err(e) = self.cert_store.store_cert("server_key", key) {
+            warn!("RPC[{}]: cert store key failed: {}", client_id, e);
+            return self.build_ack(client_id, reply_to, false, "failed to store device key");
+        }
+
+        self.cert_store.set_mode(CertTlsMode::PskAndCert);
+        info!(
+            "RPC[{}]: certificates provisioned, mode=PskAndCert",
+            client_id
+        );
+        self.build_ack(client_id, reply_to, true, "certificates provisioned")
+    }
+
+    fn build_cert_status(&mut self, client_id: ClientId, reply_to: u32) -> Option<ResponseFrame> {
+        let mode = match self.cert_store.mode() {
+            CertTlsMode::PskOnly => fb::TlsMode::PskOnly,
+            CertTlsMode::CertOnly => fb::TlsMode::CertOnly,
+            CertTlsMode::PskAndCert => fb::TlsMode::PskAndCert,
+        };
+
+        let mut fbb = FlatBufferBuilder::with_capacity(128);
+        let serial = fbb.create_string("PF-000000");
+
+        let csr = fb::CertStatusResponse::create(
+            &mut fbb,
+            &fb::CertStatusResponseArgs {
+                mode,
+                ca_fingerprint: None,
+                device_serial: Some(serial),
+            },
+        );
+
+        let msg = fb::Message::create(
+            &mut fbb,
+            &fb::MessageArgs {
+                id: reply_to,
+                payload_type: fb::Payload::CertStatusResponse,
+                payload: Some(csr.as_union_value()),
+            },
+        );
+
+        fbb.finish(msg, None);
+        self.encode_response(client_id, &fbb)
+    }
+
+    // ── OTA progress event builder ────────────────────────────
+
+    pub fn build_ota_progress_event(
+        &mut self,
+        client_id: ClientId,
+        bytes_written: u32,
+        total_bytes: u32,
+    ) -> Option<ResponseFrame> {
+        let percent = if total_bytes > 0 {
+            ((bytes_written as u64 * 100) / total_bytes as u64) as u8
+        } else {
+            0
+        };
+
+        let mut fbb = FlatBufferBuilder::with_capacity(64);
+        let pe = fb::OtaProgressEvent::create(
+            &mut fbb,
+            &fb::OtaProgressEventArgs {
+                bytes_written,
+                total_bytes,
+                percent,
+            },
+        );
+
+        let msg = fb::Message::create(
+            &mut fbb,
+            &fb::MessageArgs {
+                id: self.alloc_msg_id(),
+                payload_type: fb::Payload::OtaProgressEvent,
+                payload: Some(pe.as_union_value()),
+            },
+        );
+
+        fbb.finish(msg, None);
+        self.encode_response(client_id, &fbb)
+    }
+
+    /// Encode a finished FlatBufferBuilder into a length-prefixed ResponseFrame.
+    fn encode_response(
+        &self,
+        client_id: ClientId,
+        fbb: &FlatBufferBuilder<'_>,
+    ) -> Option<ResponseFrame> {
+        let payload = fbb.finished_data();
+        let mut buf = [0u8; 512];
+        let len = encode_frame(payload, &mut buf)?;
+
+        let mut data = heapless::Vec::new();
+        data.extend_from_slice(&buf[..len]).ok()?;
+
+        Some(ResponseFrame { client_id, data })
     }
 }

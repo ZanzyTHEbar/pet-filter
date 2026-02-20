@@ -11,8 +11,6 @@
 
 use core::sync::atomic::{AtomicU16, Ordering};
 
-use crate::drivers::hw_init;
-
 static SIM_TEMP_ADC: AtomicU16 = AtomicU16::new(2048);
 
 #[cfg(not(target_os = "espidf"))]
@@ -20,12 +18,12 @@ pub fn sim_set_temp_adc(raw: u16) {
     SIM_TEMP_ADC.store(raw, Ordering::Relaxed);
 }
 
-const R25: f32       = 10_000.0;
-const BETA: f32      = 3950.0;
-const T25_K: f32     = 298.15;
+const R25: f32 = 10_000.0;
+const BETA: f32 = 3950.0;
+const T25_K: f32 = 298.15;
 const R_DIVIDER: f32 = 10_000.0;
-const ADC_MAX: f32   = 4095.0;
-const V_REF: f32     = 3.3;
+const ADC_MAX: f32 = 4095.0;
+const V_REF: f32 = 3.3;
 
 #[derive(Debug, Clone, Copy)]
 pub struct TemperatureReading {

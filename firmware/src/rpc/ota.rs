@@ -1,30 +1,29 @@
-//! Secure OTA firmware update via RPC.
+//! Secure OTA firmware update via RPC — backed by `esp-ota` crate.
 //!
 //! Flow: OtaBegin → N × OtaChunk → OtaFinalize → reboot
 //!
 //! Session must be Authenticated before OtaBegin is accepted.
+//!
+//! The `esp-ota` crate provides a safe Rust wrapper around the ESP-IDF
+//! OTA partition API, eliminating all unsafe FFI in this module.
 
 use core::fmt;
 use log::{info, warn};
-
-#[cfg(target_os = "espidf")]
-use esp_idf_svc::sys::*;
 
 const MAX_FIRMWARE_SIZE: u32 = 4 * 1024 * 1024; // 4 MB
 
 // ── Error type ────────────────────────────────────────────────
 
-/// Typed errors for OTA firmware update operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OtaError {
     AlreadyInProgress,
     InvalidSize,
     InvalidSha,
     NoPartition,
-    BeginFailed(i32),
-    WriteFailed(i32),
-    VerifyFailed(i32),
-    BootSetFailed(i32),
+    BeginFailed,
+    WriteFailed,
+    VerifyFailed,
+    BootSetFailed,
     IncompleteTransfer,
     NotReceiving,
     NonSequential,
@@ -34,18 +33,18 @@ pub enum OtaError {
 impl fmt::Display for OtaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::AlreadyInProgress  => write!(f, "OTA session already in progress"),
-            Self::InvalidSize        => write!(f, "firmware size out of range (max 4 MB)"),
-            Self::InvalidSha         => write!(f, "SHA-256 must be exactly 32 bytes"),
-            Self::NoPartition        => write!(f, "no inactive OTA partition available"),
-            Self::BeginFailed(rc)    => write!(f, "esp_ota_begin failed (rc={})", rc),
-            Self::WriteFailed(rc)    => write!(f, "esp_ota_write failed (rc={})", rc),
-            Self::VerifyFailed(rc)   => write!(f, "esp_ota_end verification failed (rc={})", rc),
-            Self::BootSetFailed(rc)  => write!(f, "esp_ota_set_boot_partition failed (rc={})", rc),
+            Self::AlreadyInProgress => write!(f, "OTA session already in progress"),
+            Self::InvalidSize => write!(f, "firmware size out of range (max 4 MB)"),
+            Self::InvalidSha => write!(f, "SHA-256 must be exactly 32 bytes"),
+            Self::NoPartition => write!(f, "no inactive OTA partition available"),
+            Self::BeginFailed => write!(f, "OTA begin failed"),
+            Self::WriteFailed => write!(f, "OTA write failed"),
+            Self::VerifyFailed => write!(f, "OTA verification failed"),
+            Self::BootSetFailed => write!(f, "set boot partition failed"),
             Self::IncompleteTransfer => write!(f, "finalize called before all bytes written"),
-            Self::NotReceiving       => write!(f, "operation requires active Receiving state"),
-            Self::NonSequential      => write!(f, "chunk offset does not match expected offset"),
-            Self::Overflow           => write!(f, "chunk would exceed declared firmware size"),
+            Self::NotReceiving => write!(f, "operation requires active Receiving state"),
+            Self::NonSequential => write!(f, "chunk offset does not match expected offset"),
+            Self::Overflow => write!(f, "chunk would exceed declared firmware size"),
         }
     }
 }
@@ -55,21 +54,36 @@ impl fmt::Display for OtaError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OtaState {
     Idle,
-    Receiving { expected_size: u32, bytes_written: u32 },
+    Receiving {
+        expected_size: u32,
+        bytes_written: u32,
+    },
+    WritePending {
+        expected_size: u32,
+        bytes_written: u32,
+        pending_offset: u32,
+        pending_len: u32,
+    },
     Verifying,
     ReadyToReboot,
     Failed,
 }
 
-// ── Manager ───────────────────────────────────────────────────
+// ── Manager (ESP-IDF: uses esp-ota crate) ─────────────────────
+
+/// OTA firmware update manager.
+///
+/// On ESP-IDF targets, uses the `esp-ota` crate for safe partition
+/// management. On simulation targets, uses in-memory stubs.
+/// Staging buffer for deferred OTA writes (avoids blocking control loop).
+const OTA_STAGING_BUF_SIZE: usize = 4096;
 
 pub struct OtaManager {
     state: OtaState,
     expected_sha256: [u8; 32],
+    staging_buf: [u8; OTA_STAGING_BUF_SIZE],
     #[cfg(target_os = "espidf")]
-    ota_handle: esp_ota_handle_t,
-    #[cfg(target_os = "espidf")]
-    update_partition: *const esp_partition_t,
+    ota_update: Option<esp_ota::OtaUpdate>,
 }
 
 impl OtaManager {
@@ -77,10 +91,9 @@ impl OtaManager {
         Self {
             state: OtaState::Idle,
             expected_sha256: [0u8; 32],
+            staging_buf: [0u8; OTA_STAGING_BUF_SIZE],
             #[cfg(target_os = "espidf")]
-            ota_handle: 0,
-            #[cfg(target_os = "espidf")]
-            update_partition: core::ptr::null(),
+            ota_update: None,
         }
     }
 
@@ -104,33 +117,29 @@ impl OtaManager {
 
         #[cfg(target_os = "espidf")]
         {
-            // SAFETY: Called from single main-task context; state == Idle
-            // guarantees no concurrent OTA handle exists.
-            unsafe {
-                let partition = esp_ota_get_next_update_partition(core::ptr::null());
-                if partition.is_null() {
-                    return Err(OtaError::NoPartition);
-                }
-                self.update_partition = partition;
-
-                let ret = esp_ota_begin(partition, firmware_size as usize, &mut self.ota_handle);
-                if ret != ESP_OK {
-                    warn!("esp_ota_begin failed: rc={}", ret);
-                    return Err(OtaError::BeginFailed(ret));
-                }
-            }
+            let update = esp_ota::OtaUpdate::begin().map_err(|e| {
+                warn!("esp-ota begin failed: {:?}", e);
+                OtaError::BeginFailed
+            })?;
+            self.ota_update = Some(update);
         }
 
-        self.state = OtaState::Receiving { expected_size: firmware_size, bytes_written: 0 };
+        self.state = OtaState::Receiving {
+            expected_size: firmware_size,
+            bytes_written: 0,
+        };
         info!("OTA: begin ({} bytes)", firmware_size);
         Ok(())
     }
 
     /// Write a chunk at the given byte offset. Returns total bytes written.
     pub fn write_chunk(&mut self, offset: u32, data: &[u8]) -> Result<u32, OtaError> {
-        let (expected_size, bytes_written) = match self.state {
-            OtaState::Receiving { expected_size, bytes_written } => (expected_size, bytes_written),
-            _ => return Err(OtaError::NotReceiving),
+        let OtaState::Receiving {
+            expected_size,
+            bytes_written,
+        } = self.state
+        else {
+            return Err(OtaError::NotReceiving);
         };
 
         if offset != bytes_written {
@@ -142,27 +151,32 @@ impl OtaManager {
 
         #[cfg(target_os = "espidf")]
         {
-            // SAFETY: ota_handle is valid — allocated by begin() and not yet
-            // freed; single-threaded access guaranteed by main-task execution.
-            let ret = unsafe {
-                esp_ota_write(self.ota_handle, data.as_ptr() as *const _, data.len())
-            };
-            if ret != ESP_OK {
-                self.abort();
-                return Err(OtaError::WriteFailed(ret));
+            if let Some(ref mut update) = self.ota_update {
+                update.write(data).map_err(|e| {
+                    warn!("esp-ota write failed: {:?}", e);
+                    self.abort();
+                    OtaError::WriteFailed
+                })?;
+            } else {
+                return Err(OtaError::NotReceiving);
             }
         }
 
         let new_written = bytes_written + data.len() as u32;
-        self.state = OtaState::Receiving { expected_size, bytes_written: new_written };
+        self.state = OtaState::Receiving {
+            expected_size,
+            bytes_written: new_written,
+        };
         Ok(new_written)
     }
 
     /// Finalize: verify image, mark partition bootable, set ReadyToReboot.
     pub fn finalize(&mut self) -> Result<(), OtaError> {
         match self.state {
-            OtaState::Receiving { expected_size, bytes_written }
-                if bytes_written == expected_size => {}
+            OtaState::Receiving {
+                expected_size,
+                bytes_written,
+            } if bytes_written == expected_size => {}
             OtaState::Receiving { .. } => return Err(OtaError::IncompleteTransfer),
             _ => return Err(OtaError::NotReceiving),
         }
@@ -171,21 +185,21 @@ impl OtaManager {
 
         #[cfg(target_os = "espidf")]
         {
-            // SAFETY: ota_handle valid; called once after all chunks written.
-            unsafe {
-                let ret = esp_ota_end(self.ota_handle);
-                if ret != ESP_OK {
-                    warn!("esp_ota_end failed: rc={}", ret);
+            if let Some(update) = self.ota_update.take() {
+                let mut completed = update.finalize().map_err(|e| {
+                    warn!("esp-ota finalize failed: {:?}", e);
                     self.state = OtaState::Failed;
-                    return Err(OtaError::VerifyFailed(ret));
-                }
+                    OtaError::VerifyFailed
+                })?;
 
-                let ret = esp_ota_set_boot_partition(self.update_partition);
-                if ret != ESP_OK {
-                    warn!("esp_ota_set_boot_partition failed: rc={}", ret);
+                completed.set_as_boot_partition().map_err(|e| {
+                    warn!("esp-ota set_as_boot_partition failed: {:?}", e);
                     self.state = OtaState::Failed;
-                    return Err(OtaError::BootSetFailed(ret));
-                }
+                    OtaError::BootSetFailed
+                })?;
+            } else {
+                self.state = OtaState::Failed;
+                return Err(OtaError::NotReceiving);
             }
         }
 
@@ -194,29 +208,93 @@ impl OtaManager {
         Ok(())
     }
 
+    /// Queue a chunk for deferred writing. The control loop calls
+    /// `flush_pending()` on the next tick to perform the actual flash write
+    /// outside the RPC dispatch path.
+    pub fn queue_chunk(&mut self, offset: u32, data: &[u8]) -> Result<u32, OtaError> {
+        let OtaState::Receiving {
+            expected_size,
+            bytes_written,
+        } = self.state
+        else {
+            return Err(OtaError::NotReceiving);
+        };
+
+        if offset != bytes_written {
+            return Err(OtaError::NonSequential);
+        }
+        if bytes_written + data.len() as u32 > expected_size {
+            return Err(OtaError::Overflow);
+        }
+        if data.len() > OTA_STAGING_BUF_SIZE {
+            return Err(OtaError::Overflow);
+        }
+
+        self.staging_buf[..data.len()].copy_from_slice(data);
+        self.state = OtaState::WritePending {
+            expected_size,
+            bytes_written,
+            pending_offset: offset,
+            pending_len: data.len() as u32,
+        };
+        Ok(bytes_written + data.len() as u32)
+    }
+
+    /// Perform the deferred flash write. Returns `true` if a write was
+    /// flushed, `false` if nothing was pending.
+    pub fn flush_pending(&mut self) -> Result<bool, OtaError> {
+        let OtaState::WritePending {
+            expected_size,
+            bytes_written,
+            pending_len,
+            ..
+        } = self.state
+        else {
+            return Ok(false);
+        };
+
+        #[cfg(target_os = "espidf")]
+        {
+            if let Some(ref mut update) = self.ota_update {
+                update.write(data).map_err(|e| {
+                    warn!("esp-ota deferred write failed: {:?}", e);
+                    self.abort();
+                    OtaError::WriteFailed
+                })?;
+            } else {
+                return Err(OtaError::NotReceiving);
+            }
+        }
+
+        let new_written = bytes_written + pending_len;
+        self.state = OtaState::Receiving {
+            expected_size,
+            bytes_written: new_written,
+        };
+        Ok(true)
+    }
+
+    /// Returns true if there is a pending write that needs flushing.
+    pub fn has_pending(&self) -> bool {
+        matches!(self.state, OtaState::WritePending { .. })
+    }
+
     /// Abort the current OTA session; resets to Idle.
     pub fn abort(&mut self) {
         #[cfg(target_os = "espidf")]
         {
-            if self.ota_handle != 0 {
-                // SAFETY: ota_handle valid; esp_ota_abort invalidates it.
-                unsafe { esp_ota_abort(self.ota_handle); }
-                self.ota_handle = 0;
-            }
+            // esp-ota aborts automatically when OtaUpdate is dropped
+            self.ota_update.take();
         }
         self.state = OtaState::Idle;
         warn!("OTA: aborted");
     }
 
     /// Soft-reset into the newly flashed firmware.
-    /// Only call after `finalize()` returns `Ok(())`.
     #[cfg(target_os = "espidf")]
     pub fn reboot(&self) -> ! {
         info!("OTA: rebooting into new firmware");
-        // SAFETY: esp_restart() is the ESP-IDF sanctioned soft-reset.
-        unsafe { esp_restart(); }
-        #[allow(unreachable_code)]
-        loop {}
+        esp_ota::restart();
     }
 
     #[cfg(not(target_os = "espidf"))]
@@ -233,25 +311,15 @@ impl Default for OtaManager {
 
 // ── Boot validation ───────────────────────────────────────────
 
-/// Check OTA image state on startup and mark this firmware as valid
-/// if it was just installed (`PENDING_VERIFY`).
+/// Check OTA image state on startup and mark this firmware as valid.
 ///
 /// Without this, the rollback watchdog reverts to the previous firmware
 /// after three consecutive failed boots.
 #[cfg(target_os = "espidf")]
 pub fn check_rollback() {
-    // SAFETY: Read-only partition queries; mark_app_valid is idempotent.
-    unsafe {
-        let mut state: esp_ota_img_states_t = 0;
-        let partition = esp_ota_get_running_partition();
-        if !partition.is_null() {
-            esp_ota_get_state_partition(partition, &mut state);
-        }
-
-        if state == esp_ota_img_states_t_ESP_OTA_IMG_PENDING_VERIFY {
-            info!("OTA: new firmware booted successfully — marking valid");
-            esp_ota_mark_app_valid_cancel_rollback();
-        }
+    match esp_ota::mark_app_valid() {
+        Ok(()) => info!("OTA: firmware marked valid (rollback cancelled)"),
+        Err(e) => warn!("OTA: mark_app_valid failed: {:?}", e),
     }
 }
 
@@ -266,7 +334,9 @@ pub fn check_rollback() {
 mod tests {
     use super::*;
 
-    fn sha() -> [u8; 32] { [0u8; 32] }
+    fn sha() -> [u8; 32] {
+        [0u8; 32]
+    }
 
     #[test]
     fn begin_requires_idle_state() {
@@ -284,7 +354,10 @@ mod tests {
     #[test]
     fn begin_rejects_oversized() {
         let mut ota = OtaManager::new();
-        assert_eq!(ota.begin(5 * 1024 * 1024, &sha()), Err(OtaError::InvalidSize));
+        assert_eq!(
+            ota.begin(5 * 1024 * 1024, &sha()),
+            Err(OtaError::InvalidSize)
+        );
     }
 
     #[test]
@@ -354,8 +427,8 @@ mod tests {
     }
 
     #[test]
-    fn error_display_includes_rc() {
-        assert!(OtaError::BeginFailed(-1).to_string().contains("rc="));
-        assert!(OtaError::WriteFailed(-5).to_string().contains("-5"));
+    fn error_display_coverage() {
+        assert!(OtaError::BeginFailed.to_string().contains("begin failed"));
+        assert!(OtaError::WriteFailed.to_string().contains("write failed"));
     }
 }

@@ -133,9 +133,7 @@ impl ButtonDriver {
 
     #[cfg(target_os = "espidf")]
     fn is_pressed_hw() -> bool {
-        // Real GPIO read: PinDriver<Input>::is_low()
-        // Wired when P0-1 HAL drivers are integrated.
-        false
+        !crate::drivers::hw_init::gpio_read(crate::pins::BUTTON_GPIO)
     }
 
     #[cfg(not(target_os = "espidf"))]

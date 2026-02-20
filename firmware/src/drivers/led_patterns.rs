@@ -111,7 +111,9 @@ impl LedPatternEngine {
 
         let selected = self.select_active();
         let reset_phase = match (&self.active, &selected) {
-            (Some(prev), Some(next)) => prev.priority != next.priority || prev.pattern != next.pattern,
+            (Some(prev), Some(next)) => {
+                prev.priority != next.priority || prev.pattern != next.pattern
+            }
             (None, Some(_)) => true,
             _ => false,
         };
@@ -152,7 +154,7 @@ impl LedPatternEngine {
             }
             PatternId::DoubleBlink => {
                 let cycle = self.phase_ms % 1000;
-                let on = cycle < 100 || (cycle >= 200 && cycle < 300);
+                let on = cycle < 100 || (200..300).contains(&cycle);
                 if on { colour } else { (0, 0, 0) }
             }
             PatternId::RapidFlash => {
@@ -186,15 +188,15 @@ impl LedPatternEngine {
 
 // ── Well-known colour constants (PetFilter brand) ─────────────
 
-pub const COLOUR_IDLE: Rgb = (0, 180, 148);       // Teal
-pub const COLOUR_SENSING: Rgb = (0, 100, 255);     // Blue
-pub const COLOUR_ACTIVE: Rgb = (0, 50, 255);       // Deep blue
-pub const COLOUR_PURGING: Rgb = (0, 200, 200);     // Cyan
-pub const COLOUR_ERROR: Rgb = (255, 0, 0);          // Red
+pub const COLOUR_IDLE: Rgb = (0, 180, 148); // Teal
+pub const COLOUR_SENSING: Rgb = (0, 100, 255); // Blue
+pub const COLOUR_ACTIVE: Rgb = (0, 50, 255); // Deep blue
+pub const COLOUR_PURGING: Rgb = (0, 200, 200); // Cyan
+pub const COLOUR_ERROR: Rgb = (255, 0, 0); // Red
 pub const COLOUR_PROVISIONING: Rgb = (128, 0, 255); // Purple
 pub const COLOUR_WIFI_CONNECTING: Rgb = (0, 100, 255); // Blue
-pub const COLOUR_WIFI_CONNECTED: Rgb = (0, 255, 50);   // Green
-pub const COLOUR_LOW_WATER: Rgb = (255, 200, 0);    // Yellow
+pub const COLOUR_WIFI_CONNECTED: Rgb = (0, 255, 50); // Green
+pub const COLOUR_LOW_WATER: Rgb = (255, 200, 0); // Yellow
 
 #[cfg(test)]
 mod tests {

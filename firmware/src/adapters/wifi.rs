@@ -15,11 +15,11 @@
 //! 8 s … capped at 60 s) before retrying.
 
 use core::fmt;
-use log::{info, warn, error};
+use log::{error, info, warn};
 
+use super::utils::is_printable_ascii;
 use crate::app::events::AppEvent;
 use crate::app::ports::EventSink;
-use super::utils::is_printable_ascii;
 
 // ───────────────────────────────────────────────────────────────
 // Port trait
@@ -41,9 +41,15 @@ impl fmt::Display for ConnectivityError {
         match self {
             Self::NoCredentials => write!(f, "no WiFi credentials configured"),
             Self::InvalidSsid => write!(f, "SSID invalid (must be 1-32 printable ASCII bytes)"),
-            Self::InvalidPassword => write!(f, "password invalid (must be 8-64 bytes for WPA2, or empty for open)"),
+            Self::InvalidPassword => write!(
+                f,
+                "password invalid (must be 8-64 bytes for WPA2, or empty for open)"
+            ),
             Self::ConnectionFailed => write!(f, "WiFi connection failed"),
-            Self::AuthFailed => write!(f, "WiFi authentication failed (wrong password or AP rejection)"),
+            Self::AuthFailed => write!(
+                f,
+                "WiFi authentication failed (wrong password or AP rejection)"
+            ),
             Self::AlreadyConnected => write!(f, "already connected to AP"),
         }
     }
@@ -100,6 +106,62 @@ fn validate_password(password: &str) -> Result<(), ConnectivityError> {
 }
 
 // ───────────────────────────────────────────────────────────────
+// WiFi stack initialization (call once from main before connect)
+// ───────────────────────────────────────────────────────────────
+
+/// One-time WiFi stack initialization. Must be called from main()
+/// before any `WifiAdapter::connect()` calls.
+#[cfg(target_os = "espidf")]
+pub fn wifi_stack_init() -> Result<(), ConnectivityError> {
+    use esp_idf_svc::sys::*;
+    unsafe {
+        let netif_ret = esp_netif_init();
+        if netif_ret != ESP_OK as i32 {
+            error!("WiFi: esp_netif_init failed ({})", netif_ret);
+            return Err(ConnectivityError::ConnectionFailed);
+        }
+
+        let loop_ret = esp_event_loop_create_default();
+        if loop_ret != ESP_OK as i32 && loop_ret != ESP_ERR_INVALID_STATE as i32 {
+            error!("WiFi: esp_event_loop_create_default failed ({})", loop_ret);
+            return Err(ConnectivityError::ConnectionFailed);
+        }
+
+        esp_netif_create_default_wifi_sta();
+
+        let wifi_init_cfg = wifi_init_config_t {
+            ..Default::default()
+        };
+        let ret = esp_wifi_init(&wifi_init_cfg);
+        if ret != ESP_OK as i32 {
+            error!("WiFi: esp_wifi_init failed ({})", ret);
+            return Err(ConnectivityError::ConnectionFailed);
+        }
+
+        let ret = esp_wifi_set_mode(wifi_mode_t_WIFI_MODE_STA);
+        if ret != ESP_OK as i32 {
+            error!("WiFi: esp_wifi_set_mode failed ({})", ret);
+            return Err(ConnectivityError::ConnectionFailed);
+        }
+
+        let ret = esp_wifi_start();
+        if ret != ESP_OK as i32 {
+            error!("WiFi: esp_wifi_start failed ({})", ret);
+            return Err(ConnectivityError::ConnectionFailed);
+        }
+
+        info!("WiFi: stack initialized (STA mode)");
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "espidf"))]
+pub fn wifi_stack_init() -> Result<(), ConnectivityError> {
+    info!("WiFi(sim): stack init skipped");
+    Ok(())
+}
+
+// ───────────────────────────────────────────────────────────────
 // WiFi adapter
 // ───────────────────────────────────────────────────────────────
 
@@ -140,24 +202,40 @@ impl WifiAdapter {
 
     #[cfg(target_os = "espidf")]
     fn platform_connect(&mut self) -> Result<(), ConnectivityError> {
-        // ESP-IDF WiFi STA connection.
-        //
-        // The full wiring requires:
-        // 1. EspWifi::new(peripherals.modem, sysloop, nvs)
-        // 2. wifi.set_configuration(&Configuration::Client(ClientConfiguration {
-        //        ssid: self.ssid.as_str().try_into().unwrap(),
-        //        password: self.password.as_str().try_into().unwrap(),
-        //        auth_method: AuthMethod::WPA2Personal,
-        //        ..Default::default()
-        //    }))
-        // 3. wifi.start()
-        // 4. wifi.connect()
-        //
-        // These handles (EspWifi, EspEventLoop, NVS partition) will be
-        // threaded in from main.rs when P0-1 HAL wiring is complete.
-        // The modem peripheral is shared with BtDriver — coordinating
-        // BLE→WiFi transition requires stopping BLE first.
-        info!("WiFi(espidf): STA connect deferred until peripheral wiring");
+        use esp_idf_svc::sys::*;
+        unsafe {
+            // Configure STA mode with the stored SSID + password.
+            let mut wifi_cfg: wifi_config_t = core::mem::zeroed();
+            let sta = &mut wifi_cfg.__bindgen_anon_1.sta;
+
+            let ssid_bytes = self.ssid.as_bytes();
+            let pw_bytes = self.password.as_bytes();
+            sta.ssid[..ssid_bytes.len()].copy_from_slice(ssid_bytes);
+            sta.password[..pw_bytes.len()].copy_from_slice(pw_bytes);
+
+            sta.threshold.authmode = if self.password.is_empty() {
+                wifi_auth_mode_t_WIFI_AUTH_OPEN
+            } else {
+                wifi_auth_mode_t_WIFI_AUTH_WPA2_PSK
+            };
+
+            let ret = esp_wifi_set_config(wifi_interface_t_WIFI_IF_STA, &mut wifi_cfg);
+            if ret != ESP_OK as i32 {
+                error!("WiFi: esp_wifi_set_config failed ({})", ret);
+                return Err(ConnectivityError::ConnectionFailed);
+            }
+
+            let ret = esp_wifi_connect();
+            if ret != ESP_OK as i32 {
+                if ret == ESP_ERR_WIFI_SSID as i32 {
+                    return Err(ConnectivityError::InvalidSsid);
+                }
+                error!("WiFi: esp_wifi_connect failed ({})", ret);
+                return Err(ConnectivityError::ConnectionFailed);
+            }
+
+            info!("WiFi(espidf): STA connect initiated for '{}'", self.ssid);
+        }
         Ok(())
     }
 
@@ -167,20 +245,27 @@ impl WifiAdapter {
         // Simulate ~10% failure rate to exercise reconnect backoff logic.
         // Every 10th attempt fails with AuthError to test error handling.
         if self.sim_connect_counter % 10 == 3 {
-            warn!("WiFi(sim): simulated auth failure (attempt {})", self.sim_connect_counter);
+            warn!(
+                "WiFi(sim): simulated auth failure (attempt {})",
+                self.sim_connect_counter
+            );
             return Err(ConnectivityError::AuthFailed);
         }
         // Simulate 100ms connection latency — exercises the Connecting state.
         #[cfg(not(target_os = "espidf"))]
         std::thread::sleep(std::time::Duration::from_millis(100));
-        info!("WiFi(sim): connected to '{}' (attempt {})", self.ssid, self.sim_connect_counter);
+        info!(
+            "WiFi(sim): connected to '{}' (attempt {})",
+            self.ssid, self.sim_connect_counter
+        );
         Ok(())
     }
 
     #[cfg(target_os = "espidf")]
     fn platform_disconnect(&mut self) {
-        // wifi.disconnect().ok();
-        // wifi.stop().ok();
+        unsafe {
+            esp_idf_svc::sys::esp_wifi_disconnect();
+        }
     }
 
     #[cfg(not(target_os = "espidf"))]
@@ -190,8 +275,11 @@ impl WifiAdapter {
 
     #[cfg(target_os = "espidf")]
     fn platform_is_connected(&self) -> bool {
-        // wifi.is_connected().unwrap_or(false)
-        self.state == WifiState::Connected
+        use esp_idf_svc::sys::*;
+        unsafe {
+            let mut ap_info: wifi_ap_record_t = core::mem::zeroed();
+            esp_wifi_sta_get_ap_info(&mut ap_info) == ESP_OK as i32
+        }
     }
 
     #[cfg(not(target_os = "espidf"))]
@@ -206,7 +294,10 @@ impl WifiAdapter {
         self.sim_connected_ticks = self.sim_connected_ticks.wrapping_add(1);
         // Drop once every ~120 poll ticks to simulate AP roam/interference.
         if self.sim_connected_ticks % 120 == 119 {
-            warn!("WiFi(sim): simulated spontaneous disconnect at tick {}", self.sim_connected_ticks);
+            warn!(
+                "WiFi(sim): simulated spontaneous disconnect at tick {}",
+                self.sim_connected_ticks
+            );
             return false; // signal: disconnect
         }
         true
@@ -214,11 +305,15 @@ impl WifiAdapter {
 
     #[cfg(target_os = "espidf")]
     fn platform_rssi(&self) -> Option<i8> {
-        // Query via esp_wifi_sta_get_ap_info:
-        // let mut ap_info: wifi_ap_record_t = Default::default();
-        // unsafe { esp_wifi_sta_get_ap_info(&mut ap_info); }
-        // Some(ap_info.rssi)
-        None
+        use esp_idf_svc::sys::*;
+        unsafe {
+            let mut ap_info: wifi_ap_record_t = core::mem::zeroed();
+            if esp_wifi_sta_get_ap_info(&mut ap_info) == ESP_OK as i32 {
+                Some(ap_info.rssi)
+            } else {
+                None
+            }
+        }
     }
 
     #[cfg(not(target_os = "espidf"))]
@@ -279,18 +374,20 @@ impl ConnectivityPort for WifiAdapter {
     fn poll(&mut self) {
         match self.state {
             WifiState::Reconnecting { attempt } => {
-                info!("WiFi: reconnect attempt {} (backoff {}s)", attempt, self.backoff_secs);
-                match self.platform_connect() {
-                    Ok(()) => {
-                        self.state = WifiState::Connected;
-                        self.backoff_secs = 2;
-                        self.last_rssi = self.platform_rssi();
-                        info!("WiFi: reconnected (RSSI={:?})", self.last_rssi);
-                    }
-                    Err(_) => {
-                        self.backoff_secs = (self.backoff_secs * 2).min(MAX_BACKOFF_SECS);
-                        self.state = WifiState::Reconnecting { attempt: attempt + 1 };
-                    }
+                info!(
+                    "WiFi: reconnect attempt {} (backoff {}s)",
+                    attempt, self.backoff_secs
+                );
+                if self.platform_connect().is_ok() {
+                    self.state = WifiState::Connected;
+                    self.backoff_secs = 2;
+                    self.last_rssi = self.platform_rssi();
+                    info!("WiFi: reconnected (RSSI={:?})", self.last_rssi);
+                } else {
+                    self.backoff_secs = (self.backoff_secs * 2).min(MAX_BACKOFF_SECS);
+                    self.state = WifiState::Reconnecting {
+                        attempt: attempt + 1,
+                    };
                 }
             }
             WifiState::Connected => {
@@ -298,14 +395,16 @@ impl ConnectivityPort for WifiAdapter {
                 let still_up = self.sim_advance_tick();
                 #[cfg(target_os = "espidf")]
                 let still_up = self.platform_is_connected();
-                if !still_up {
+                if still_up {
+                    self.last_rssi = self.platform_rssi();
+                } else {
                     warn!("WiFi: connection lost, entering reconnect");
                     self.state = WifiState::Reconnecting { attempt: 0 };
                     self.last_rssi = None;
                     #[cfg(not(target_os = "espidf"))]
-                    { self.sim_connected_ticks = 0; }
-                } else {
-                    self.last_rssi = self.platform_rssi();
+                    {
+                        self.sim_connected_ticks = 0;
+                    }
                 }
             }
             _ => {}
@@ -316,9 +415,13 @@ impl ConnectivityPort for WifiAdapter {
         validate_ssid(ssid)?;
         validate_password(password)?;
         self.ssid.clear();
-        self.ssid.push_str(ssid).map_err(|_| ConnectivityError::InvalidSsid)?;
+        self.ssid
+            .push_str(ssid)
+            .map_err(|_| ConnectivityError::InvalidSsid)?;
         self.password.clear();
-        self.password.push_str(password).map_err(|_| ConnectivityError::InvalidPassword)?;
+        self.password
+            .push_str(password)
+            .map_err(|_| ConnectivityError::InvalidPassword)?;
         info!("WiFi: credentials updated (SSID='{}')", self.ssid);
         Ok(())
     }
@@ -339,8 +442,10 @@ impl EventSink for WifiAdapter {
         }
         match event {
             AppEvent::Telemetry(t) => {
-                info!("WiFi/event: telemetry state={:?} nh3={:.1}ppm faults=0b{:08b}",
-                    t.state, t.nh3_ppm, t.fault_flags);
+                info!(
+                    "WiFi/event: telemetry state={:?} nh3={:.1}ppm faults=0b{:08b}",
+                    t.state, t.nh3_ppm, t.fault_flags
+                );
             }
             AppEvent::StateChanged { from, to } => {
                 info!("WiFi/event: state {:?} -> {:?}", from, to);
@@ -369,13 +474,19 @@ mod tests {
     #[test]
     fn rejects_empty_ssid() {
         let mut a = WifiAdapter::new();
-        assert_eq!(a.set_credentials("", "password123"), Err(ConnectivityError::InvalidSsid));
+        assert_eq!(
+            a.set_credentials("", "password123"),
+            Err(ConnectivityError::InvalidSsid)
+        );
     }
 
     #[test]
     fn rejects_short_password() {
         let mut a = WifiAdapter::new();
-        assert_eq!(a.set_credentials("MyNet", "short"), Err(ConnectivityError::InvalidPassword));
+        assert_eq!(
+            a.set_credentials("MyNet", "short"),
+            Err(ConnectivityError::InvalidPassword)
+        );
     }
 
     #[test]

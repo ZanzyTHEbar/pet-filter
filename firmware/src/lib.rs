@@ -9,12 +9,12 @@
 pub mod app;
 pub mod config;
 pub mod diagnostics;
-pub mod fsm;
-pub mod rpc;
-pub mod scheduler;
-pub mod safety;
 pub mod events;
+pub mod fsm;
 pub mod power;
+pub mod rpc;
+pub mod safety;
+pub mod scheduler;
 
 mod error;
 mod pins;
@@ -22,6 +22,6 @@ mod pins;
 // Re-export the ESPidf-only modules so the crate compiles; the actual
 // implementations are guarded by cfg attributes inside.
 pub mod adapters;
+pub mod control;
 pub mod drivers;
 pub mod sensors;
-pub mod control;

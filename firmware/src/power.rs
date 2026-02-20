@@ -40,7 +40,7 @@
 //!   on real hardware and `main()` re-enters).
 
 use crate::config::SystemConfig;
-use log::{info, warn};
+use log::info;
 
 // ── Error type ────────────────────────────────────────────────
 
@@ -56,13 +56,11 @@ pub enum PowerError {
 impl core::fmt::Display for PowerError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::UlpLoadFailed(rc)  => write!(f, "ULP binary load failed (rc={})", rc),
+            Self::UlpLoadFailed(rc) => write!(f, "ULP binary load failed (rc={})", rc),
             Self::UlpStartFailed(rc) => write!(f, "ULP run failed (rc={})", rc),
         }
     }
 }
-
-
 
 // ── ULP shared variable bindings ──────────────────────────────
 
@@ -130,32 +128,50 @@ extern "C" {
 /// Read the last NH3 ADC reading captured by the ULP.
 /// SAFETY: Called only after stop_ulp_monitor(); ULP is halted.
 #[cfg(target_os = "espidf")]
-unsafe fn ulp_read_nh3_last() -> u32 { unsafe { ulp_nh3_last_reading } }
+unsafe fn ulp_read_nh3_last() -> u32 {
+    unsafe { ulp_nh3_last_reading }
+}
 
 /// Read the consecutive above-threshold count from the ULP.
 /// SAFETY: Same as `ulp_read_nh3_last()`.
 #[cfg(target_os = "espidf")]
-unsafe fn ulp_read_above_count() -> u32 { unsafe { ulp_nh3_above_count } }
+unsafe fn ulp_read_above_count() -> u32 {
+    unsafe { ulp_nh3_above_count }
+}
 
 /// Read the ULP cycle counter.
 /// SAFETY: Same as `ulp_read_nh3_last()`.
 #[cfg(target_os = "espidf")]
-unsafe fn ulp_read_cycle_count() -> u32 { unsafe { ulp_cycle_count } }
+unsafe fn ulp_read_cycle_count() -> u32 {
+    unsafe { ulp_cycle_count }
+}
 
 /// Write the NH3 ADC threshold that triggers a ULP wake.
 /// SAFETY: Called before ulp_riscv_run(); ULP has not started yet.
 #[cfg(target_os = "espidf")]
-unsafe fn ulp_write_threshold(val: u32) { unsafe { ulp_nh3_threshold_adc = val; } }
+unsafe fn ulp_write_threshold(val: u32) {
+    unsafe {
+        ulp_nh3_threshold_adc = val;
+    }
+}
 
 /// Write the consecutive-readings confirm count.
 /// SAFETY: Same as `ulp_write_threshold()`.
 #[cfg(target_os = "espidf")]
-unsafe fn ulp_write_confirm_count(val: u32) { unsafe { ulp_nh3_confirm_count = val; } }
+unsafe fn ulp_write_confirm_count(val: u32) {
+    unsafe {
+        ulp_nh3_confirm_count = val;
+    }
+}
 
 /// Set the stop flag to signal the ULP to halt.
 /// SAFETY: Written before reading shared fields; read by ULP in its loop.
 #[cfg(target_os = "espidf")]
-unsafe fn ulp_write_stop_flag(val: u32) { unsafe { ulp_stop_flag = val; } }
+unsafe fn ulp_write_stop_flag(val: u32) {
+    unsafe {
+        ulp_stop_flag = val;
+    }
+}
 
 // ── Power modes ───────────────────────────────────────────────
 
@@ -206,12 +222,12 @@ pub struct PowerManager {
 }
 
 impl PowerManager {
-    pub fn new(config: &SystemConfig) -> Self {
+    pub fn new(_config: &SystemConfig) -> Self {
         Self {
             mode: PowerMode::Active,
             ulp_state: UlpSharedState::default(),
-            idle_to_light_secs: 300,  // 5 minutes
-            idle_to_deep_secs: 1800,  // 30 minutes
+            idle_to_light_secs: 300, // 5 minutes
+            idle_to_deep_secs: 1800, // 30 minutes
             idle_ticks: 0,
             ulp_loaded: false,
         }
@@ -399,8 +415,11 @@ impl PowerManager {
     /// [`WakeReason::PowerOn`].
     #[cfg(not(target_os = "espidf"))]
     pub fn enter_light_sleep(&mut self, timeout_secs: u32) -> WakeReason {
-        use crate::events::{push_event, Event};
-        info!("PowerManager(sim): light sleep {}s → injecting UlpWake after 100ms", timeout_secs);
+        use crate::events::{Event, push_event};
+        info!(
+            "PowerManager(sim): light sleep {}s → injecting UlpWake after 100ms",
+            timeout_secs
+        );
         self.mode = PowerMode::LightSleep;
 
         // Keep sim sleep short (100ms) so tests run fast; real hardware
@@ -428,9 +447,7 @@ impl PowerManager {
 
         unsafe {
             esp_idf_sys::esp_sleep_enable_ulp_wakeup();
-            esp_idf_sys::esp_sleep_enable_timer_wakeup(
-                self.idle_to_deep_secs as u64 * 1_000_000,
-            );
+            esp_idf_sys::esp_sleep_enable_timer_wakeup(self.idle_to_deep_secs as u64 * 1_000_000);
             esp_idf_sys::esp_deep_sleep_start();
         }
 
@@ -484,5 +501,99 @@ impl PowerManager {
 
     pub fn is_ulp_loaded(&self) -> bool {
         self.ulp_loaded
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::SystemConfig;
+
+    fn make_pm() -> PowerManager {
+        PowerManager::new(&SystemConfig::default())
+    }
+
+    #[test]
+    fn starts_in_active_mode() {
+        let pm = make_pm();
+        assert_eq!(pm.mode(), PowerMode::Active);
+    }
+
+    #[test]
+    fn ulp_not_loaded_initially() {
+        let pm = make_pm();
+        assert!(!pm.is_ulp_loaded());
+    }
+
+    #[test]
+    fn activity_resets_idle() {
+        let mut pm = make_pm();
+        for _ in 0..100 {
+            pm.tick(false);
+        }
+        assert!(pm.idle_ticks > 0);
+
+        pm.tick(true);
+        assert_eq!(pm.idle_ticks, 0);
+    }
+
+    #[test]
+    fn no_transition_with_activity() {
+        let mut pm = make_pm();
+        for _ in 0..10000 {
+            let result = pm.tick(true);
+            assert!(result.is_none());
+        }
+        assert_eq!(pm.mode(), PowerMode::Active);
+    }
+
+    #[test]
+    fn light_sleep_after_idle_threshold() {
+        let mut pm = make_pm();
+        let threshold = pm.idle_to_light_secs as u64;
+
+        for i in 0..=threshold {
+            let result = pm.tick(false);
+            if i == threshold {
+                assert_eq!(result, Some(PowerMode::LightSleep));
+            }
+        }
+    }
+
+    #[test]
+    fn deep_sleep_after_extended_idle() {
+        let mut pm = make_pm();
+        let threshold = pm.idle_to_deep_secs as u64;
+
+        for _ in 0..threshold {
+            pm.tick(false);
+        }
+        let result = pm.tick(false);
+        assert_eq!(result, Some(PowerMode::DeepSleep));
+    }
+
+    #[test]
+    fn ulp_shared_state_exists() {
+        let state = UlpSharedState::default();
+        // Verify struct is constructible and fields are accessible
+        let _ = state.nh3_threshold_adc;
+        let _ = state.nh3_last_reading;
+    }
+
+    #[test]
+    fn sim_ulp_load_succeeds() {
+        let mut pm = make_pm();
+        assert!(pm.load_ulp_program().is_ok());
+        assert!(pm.is_ulp_loaded());
+    }
+
+    #[test]
+    fn sim_ulp_monitor_cycle() {
+        let mut pm = make_pm();
+        pm.load_ulp_program().unwrap();
+        pm.start_ulp_monitor(2000, 5);
+        let state = pm.read_ulp_state();
+        assert_eq!(state.nh3_threshold_adc, 2000);
+        pm.stop_ulp_monitor();
     }
 }

@@ -16,9 +16,7 @@ pub struct StatusLed {
 
 impl StatusLed {
     pub fn new() -> Self {
-        Self {
-            current: (0, 0, 0),
-        }
+        Self { current: (0, 0, 0) }
     }
 
     pub fn set_colour(&mut self, r: u8, g: u8, b: u8) {

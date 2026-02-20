@@ -52,7 +52,10 @@ impl PumpDriver {
         self.set_duty_hw(duty);
 
         self.hw_duty = duty;
-        self.state = PumpState::Running { duty, dir: direction };
+        self.state = PumpState::Running {
+            duty,
+            dir: direction,
+        };
     }
 
     pub fn stop(&mut self) {

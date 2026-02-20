@@ -9,53 +9,19 @@
 use log::{info, warn};
 
 use esp_idf_svc::sys::{
-    AF_INET, EAGAIN, F_SETFL, O_NONBLOCK, SOCK_STREAM,
-    MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY,
-    MBEDTLS_ERR_SSL_WANT_READ,
-    MBEDTLS_ERR_SSL_WANT_WRITE,
-    MBEDTLS_SSL_IS_SERVER,
-    MBEDTLS_SSL_PRESET_DEFAULT,
-    MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_PSK,
-    MBEDTLS_SSL_TRANSPORT_STREAM,
-    MBEDTLS_SSL_VERIFY_NONE,
-    in_addr,
-    mbedtls_ctr_drbg_context,
-    mbedtls_ctr_drbg_free,
-    mbedtls_ctr_drbg_init,
-    mbedtls_ctr_drbg_random,
-    mbedtls_ctr_drbg_seed,
-    mbedtls_entropy_context,
-    mbedtls_entropy_free,
-    mbedtls_entropy_func,
-    mbedtls_entropy_init,
-    mbedtls_ssl_close_notify,
-    mbedtls_ssl_config,
-    mbedtls_ssl_config_defaults,
-    mbedtls_ssl_config_free,
-    mbedtls_ssl_config_init,
-    mbedtls_ssl_conf_authmode,
-    mbedtls_ssl_conf_psk,
-    mbedtls_ssl_conf_rng,
-    mbedtls_ssl_conf_tls13_key_exchange_modes,
-    mbedtls_ssl_context,
-    mbedtls_ssl_free,
-    mbedtls_ssl_handshake,
-    mbedtls_ssl_init,
-    mbedtls_ssl_read,
-    mbedtls_ssl_set_bio,
-    mbedtls_ssl_setup,
-    mbedtls_ssl_write,
-    sockaddr_in,
-    lwip_accept,
-    lwip_bind,
-    lwip_close,
-    lwip_fcntl,
-    lwip_htons,
-    lwip_listen,
-    lwip_recv,
-    lwip_send,
-    lwip_socket,
-    vTaskDelay,
+    AF_INET, EAGAIN, F_SETFL, MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY, MBEDTLS_ERR_SSL_WANT_READ,
+    MBEDTLS_ERR_SSL_WANT_WRITE, MBEDTLS_SSL_IS_SERVER, MBEDTLS_SSL_PRESET_DEFAULT,
+    MBEDTLS_SSL_TLS1_3_KEY_EXCHANGE_MODE_PSK, MBEDTLS_SSL_TRANSPORT_STREAM,
+    MBEDTLS_SSL_VERIFY_NONE, O_NONBLOCK, SOCK_STREAM, in_addr, lwip_accept, lwip_bind, lwip_close,
+    lwip_fcntl, lwip_htons, lwip_listen, lwip_recv, lwip_send, lwip_socket,
+    mbedtls_ctr_drbg_context, mbedtls_ctr_drbg_free, mbedtls_ctr_drbg_init,
+    mbedtls_ctr_drbg_random, mbedtls_ctr_drbg_seed, mbedtls_entropy_context, mbedtls_entropy_free,
+    mbedtls_entropy_func, mbedtls_entropy_init, mbedtls_ssl_close_notify,
+    mbedtls_ssl_conf_authmode, mbedtls_ssl_conf_psk, mbedtls_ssl_conf_rng,
+    mbedtls_ssl_conf_tls13_key_exchange_modes, mbedtls_ssl_config, mbedtls_ssl_config_defaults,
+    mbedtls_ssl_config_free, mbedtls_ssl_config_init, mbedtls_ssl_context, mbedtls_ssl_free,
+    mbedtls_ssl_handshake, mbedtls_ssl_init, mbedtls_ssl_read, mbedtls_ssl_set_bio,
+    mbedtls_ssl_setup, mbedtls_ssl_write, sockaddr_in, vTaskDelay,
 };
 
 use super::TlsTransportError;
@@ -165,9 +131,7 @@ impl Drop for EspTlsServer {
 pub(super) fn esp_new(port: u16, psk: &[u8]) -> Result<EspTlsServer, TlsTransportError> {
     // ── Step 1: bind TCP listener ─────────────────────────────────────────
     // SAFETY: lwIP socket call with valid domain/type/protocol.
-    let listener_fd = unsafe {
-        lwip_socket(AF_INET as _, SOCK_STREAM as _, 0)
-    };
+    let listener_fd = unsafe { lwip_socket(AF_INET as _, SOCK_STREAM as _, 0) };
     if listener_fd < 0 {
         warn!("TLS(espidf): lwip_socket failed ({})", listener_fd);
         return Err(TlsTransportError::Io);
@@ -191,7 +155,9 @@ pub(super) fn esp_new(port: u16, psk: &[u8]) -> Result<EspTlsServer, TlsTranspor
         )
     };
     if rc < 0 {
-        unsafe { lwip_close(listener_fd); }
+        unsafe {
+            lwip_close(listener_fd);
+        }
         warn!("TLS(espidf): lwip_bind failed ({})", rc);
         return Err(TlsTransportError::Io);
     }
@@ -199,7 +165,9 @@ pub(super) fn esp_new(port: u16, psk: &[u8]) -> Result<EspTlsServer, TlsTranspor
     // SAFETY: listen() with backlog=1 for a single-client server.
     let rc = unsafe { lwip_listen(listener_fd, 1) };
     if rc < 0 {
-        unsafe { lwip_close(listener_fd); }
+        unsafe {
+            lwip_close(listener_fd);
+        }
         warn!("TLS(espidf): lwip_listen failed ({})", rc);
         return Err(TlsTransportError::Io);
     }
@@ -208,7 +176,9 @@ pub(super) fn esp_new(port: u16, psk: &[u8]) -> Result<EspTlsServer, TlsTranspor
     // SAFETY: F_SETFL + O_NONBLOCK is a valid fcntl for sockets.
     let rc = unsafe { lwip_fcntl(listener_fd, F_SETFL as _, O_NONBLOCK as _) };
     if rc < 0 {
-        unsafe { lwip_close(listener_fd); }
+        unsafe {
+            lwip_close(listener_fd);
+        }
         warn!("TLS(espidf): O_NONBLOCK failed ({})", rc);
         return Err(TlsTransportError::Io);
     }
@@ -216,8 +186,8 @@ pub(super) fn esp_new(port: u16, psk: &[u8]) -> Result<EspTlsServer, TlsTranspor
     // ── Step 2: mbedTLS config ────────────────────────────────────────────
     // All mbedTLS structs are heap-allocated to avoid large stack frames.
     let mut entropy = Box::new(mbedtls_entropy_context::default());
-    let mut drbg    = Box::new(mbedtls_ctr_drbg_context::default());
-    let mut conf    = Box::new(mbedtls_ssl_config::default());
+    let mut drbg = Box::new(mbedtls_ctr_drbg_context::default());
+    let mut conf = Box::new(mbedtls_ssl_config::default());
 
     // SAFETY: All pointers come from Box::as_mut() and are therefore valid,
     // aligned, and exclusively owned.  The init/seed/defaults/psk calls follow
@@ -287,7 +257,12 @@ pub(super) fn esp_new(port: u16, psk: &[u8]) -> Result<EspTlsServer, TlsTranspor
 
     info!("TLS(espidf): listening on port {}", port);
 
-    Ok(EspTlsServer { listener_fd, conf, entropy, drbg })
+    Ok(EspTlsServer {
+        listener_fd,
+        conf,
+        entropy,
+        drbg,
+    })
 }
 
 /// Non-blocking accept + TLS 1.3 PSK handshake.
@@ -298,7 +273,11 @@ pub(super) fn esp_accept(server: &EspTlsServer) -> Option<EspTlsClient> {
     // Non-blocking accept — returns EAGAIN immediately if no client.
     // SAFETY: listener_fd is valid and non-blocking.
     let client_fd = unsafe {
-        lwip_accept(server.listener_fd, core::ptr::null_mut(), core::ptr::null_mut())
+        lwip_accept(
+            server.listener_fd,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+        )
     };
     if client_fd < 0 {
         return None; // EAGAIN — no client waiting
@@ -308,7 +287,9 @@ pub(super) fn esp_accept(server: &EspTlsServer) -> Option<EspTlsClient> {
     // SAFETY: F_SETFL is valid on a connected socket.
     let rc = unsafe { lwip_fcntl(client_fd, F_SETFL as _, O_NONBLOCK as _) };
     if rc < 0 {
-        unsafe { lwip_close(client_fd); }
+        unsafe {
+            lwip_close(client_fd);
+        }
         warn!("TLS(espidf): O_NONBLOCK on client failed ({})", rc);
         return None;
     }
@@ -352,7 +333,9 @@ pub(super) fn esp_accept(server: &EspTlsServer) -> Option<EspTlsClient> {
         if rc == MBEDTLS_ERR_SSL_WANT_READ || rc == MBEDTLS_ERR_SSL_WANT_WRITE {
             retries += 1;
             if retries >= HANDSHAKE_MAX_RETRIES {
-                unsafe { lwip_close(client_fd); }
+                unsafe {
+                    lwip_close(client_fd);
+                }
                 warn!("TLS(espidf): handshake timed out after {} retries", retries);
                 return None;
             }
@@ -362,12 +345,17 @@ pub(super) fn esp_accept(server: &EspTlsServer) -> Option<EspTlsClient> {
             continue;
         }
         // Fatal handshake error (e.g. wrong PSK, protocol error)
-        unsafe { lwip_close(client_fd); }
+        unsafe {
+            lwip_close(client_fd);
+        }
         warn!("TLS(espidf): handshake failed (rc={})", rc);
         return None;
     }
 
-    info!("TLS(espidf): TLS 1.3 PSK handshake complete (fd={})", client_fd);
+    info!(
+        "TLS(espidf): TLS 1.3 PSK handshake complete (fd={})",
+        client_fd
+    );
     Some(EspTlsClient { fd: client_fd, ssl })
 }
 
@@ -375,7 +363,10 @@ pub(super) fn esp_accept(server: &EspTlsServer) -> Option<EspTlsClient> {
 ///
 /// Returns `Ok(0)` when no data is available (WANT_READ), `Ok(n)` for `n`
 /// bytes read, or an error.
-pub(super) fn esp_read(client: &mut EspTlsClient, buf: &mut [u8]) -> Result<usize, TlsTransportError> {
+pub(super) fn esp_read(
+    client: &mut EspTlsClient,
+    buf: &mut [u8],
+) -> Result<usize, TlsTransportError> {
     // SAFETY: ssl is valid and Connected; buf is a valid mutable slice.
     let rc = unsafe { mbedtls_ssl_read(client.ssl.as_mut(), buf.as_mut_ptr(), buf.len()) };
 
@@ -397,7 +388,10 @@ pub(super) fn esp_read(client: &mut EspTlsClient, buf: &mut [u8]) -> Result<usiz
 ///
 /// Returns `Ok(0)` when the output buffer is full (WANT_WRITE — caller
 /// should retry), `Ok(n)` for `n` bytes written, or an error.
-pub(super) fn esp_write(client: &mut EspTlsClient, data: &[u8]) -> Result<usize, TlsTransportError> {
+pub(super) fn esp_write(
+    client: &mut EspTlsClient,
+    data: &[u8],
+) -> Result<usize, TlsTransportError> {
     // SAFETY: ssl is valid and Connected; data is a valid immutable slice.
     let rc = unsafe { mbedtls_ssl_write(client.ssl.as_mut(), data.as_ptr(), data.len()) };
 
@@ -409,4 +403,111 @@ pub(super) fn esp_write(client: &mut EspTlsClient, data: &[u8]) -> Result<usize,
     }
     warn!("TLS(espidf): ssl_write error (rc={})", rc);
     Err(TlsTransportError::Tls)
+}
+
+// ── X.509 certificate support (Phase 3) ──────────────────────────────────────
+
+/// Additional mbedTLS symbols needed for X.509 certificate auth.
+use esp_idf_svc::sys::{
+    mbedtls_pk_context, mbedtls_pk_free, mbedtls_pk_init, mbedtls_pk_parse_key,
+    mbedtls_ssl_conf_ca_chain, mbedtls_ssl_conf_own_cert, mbedtls_x509_crt, mbedtls_x509_crt_free,
+    mbedtls_x509_crt_init, mbedtls_x509_crt_parse,
+};
+
+/// Loaded X.509 certificate material for the TLS server.
+///
+/// Kept alive as long as the TLS server is running; mbedTLS references
+/// these structures from the ssl_config.
+pub(super) struct X509Context {
+    pub(super) server_cert: Box<mbedtls_x509_crt>,
+    pub(super) ca_cert: Box<mbedtls_x509_crt>,
+    pub(super) server_key: Box<mbedtls_pk_context>,
+}
+
+impl Drop for X509Context {
+    fn drop(&mut self) {
+        // SAFETY: All fields were initialised by mbedtls_x509_crt_init / mbedtls_pk_init
+        // and are freed exactly once.
+        unsafe {
+            mbedtls_x509_crt_free(self.server_cert.as_mut());
+            mbedtls_x509_crt_free(self.ca_cert.as_mut());
+            mbedtls_pk_free(self.server_key.as_mut());
+        }
+    }
+}
+
+/// Load X.509 certificates into the TLS server config.
+///
+/// `server_cert_pem`, `server_key_pem`, and `ca_cert_pem` must be
+/// PEM-encoded and NUL-terminated (mbedTLS requirement for _parse functions).
+///
+/// Returns an `X509Context` that must be kept alive for the lifetime
+/// of the TLS config.
+///
+/// # Safety
+///
+/// `conf` must be a valid, initialised `mbedtls_ssl_config`.
+pub(super) unsafe fn esp_configure_x509(
+    conf: &mut mbedtls_ssl_config,
+    server_cert_pem: &[u8],
+    server_key_pem: &[u8],
+    ca_cert_pem: &[u8],
+) -> Result<X509Context, super::TlsTransportError> {
+    let mut server_cert = Box::new(mbedtls_x509_crt::default());
+    let mut ca_cert = Box::new(mbedtls_x509_crt::default());
+    let mut server_key = Box::new(mbedtls_pk_context::default());
+
+    // SAFETY: All pointers are from Box::as_mut(), valid and exclusively owned.
+    unsafe {
+        mbedtls_x509_crt_init(server_cert.as_mut());
+        mbedtls_x509_crt_init(ca_cert.as_mut());
+        mbedtls_pk_init(server_key.as_mut());
+
+        let rc = mbedtls_x509_crt_parse(
+            server_cert.as_mut(),
+            server_cert_pem.as_ptr(),
+            server_cert_pem.len(),
+        );
+        if rc != 0 {
+            warn!("TLS(espidf): x509_crt_parse(server) failed (rc={})", rc);
+            return Err(super::TlsTransportError::Tls);
+        }
+
+        let rc = mbedtls_x509_crt_parse(ca_cert.as_mut(), ca_cert_pem.as_ptr(), ca_cert_pem.len());
+        if rc != 0 {
+            warn!("TLS(espidf): x509_crt_parse(ca) failed (rc={})", rc);
+            return Err(super::TlsTransportError::Tls);
+        }
+
+        let rc = mbedtls_pk_parse_key(
+            server_key.as_mut(),
+            server_key_pem.as_ptr(),
+            server_key_pem.len(),
+            core::ptr::null(),
+            0,
+            None,
+            core::ptr::null_mut(),
+        );
+        if rc != 0 {
+            warn!("TLS(espidf): pk_parse_key failed (rc={})", rc);
+            return Err(super::TlsTransportError::Tls);
+        }
+
+        // Register server certificate + key with the TLS config.
+        let rc = mbedtls_ssl_conf_own_cert(conf, server_cert.as_mut(), server_key.as_mut());
+        if rc != 0 {
+            warn!("TLS(espidf): ssl_conf_own_cert failed (rc={})", rc);
+            return Err(super::TlsTransportError::Tls);
+        }
+
+        // Register the CA chain for client certificate verification.
+        mbedtls_ssl_conf_ca_chain(conf, ca_cert.as_mut(), core::ptr::null_mut());
+    }
+
+    info!("TLS(espidf): X.509 certificate auth configured");
+    Ok(X509Context {
+        server_cert,
+        ca_cert,
+        server_key,
+    })
 }

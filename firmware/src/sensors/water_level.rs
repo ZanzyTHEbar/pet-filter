@@ -10,9 +10,6 @@
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use crate::drivers::hw_init;
-use crate::pins;
-
 static SIM_WATER_A: AtomicBool = AtomicBool::new(true);
 static SIM_WATER_B: AtomicBool = AtomicBool::new(true);
 
@@ -60,8 +57,14 @@ impl WaterLevelSensor {
         self.last_b = self.read_gpio_b();
 
         (
-            WaterLevelReading { tank: Tank::A, water_present: self.last_a },
-            WaterLevelReading { tank: Tank::B, water_present: self.last_b },
+            WaterLevelReading {
+                tank: Tank::A,
+                water_present: self.last_a,
+            },
+            WaterLevelReading {
+                tank: Tank::B,
+                water_present: self.last_b,
+            },
         )
     }
 

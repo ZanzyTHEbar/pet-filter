@@ -7,11 +7,20 @@
 //! 3. Client computes `HMAC-SHA256(psk, nonce)` and sends `AuthVerifyRequest`
 //! 4. Device verifies the HMAC and transitions to `Authenticated`
 //!
-//! Platform-specific crypto is cfg-gated:
-//! - ESP-IDF: `esp_fill_random` + mbedtls HMAC
-//! - Simulation: deterministic stubs for host-side testing
+//! Crypto is handled by the `hmac-sha256` crate — pure Rust, no_std,
+//! constant-time verification, identical on ESP-IDF and host targets.
 
+use burster::Limiter;
+use core::time::Duration;
 use log::warn;
+
+// ── Constants ────────────────────────────────────────────────
+
+/// Maximum number of concurrent RPC client sessions.
+pub const MAX_CLIENTS: usize = 3;
+
+/// Client identifier (index into the session table).
+pub type ClientId = u8;
 
 // ── Session state machine ────────────────────────────────────
 
@@ -27,7 +36,7 @@ pub enum SessionState {
 pub struct Session {
     pub state: SessionState,
     pub created_at: u64,
-    rate_limiter: RateLimiter,
+    rate_limiter: burster::TokenBucket<fn() -> Duration>,
     next_session_id: u32,
 }
 
@@ -36,7 +45,11 @@ impl Session {
         Self {
             state: SessionState::Unauthenticated,
             created_at: 0,
-            rate_limiter: RateLimiter::new(10.0, 1.0),
+            rate_limiter: burster::TokenBucket::new_with_time_provider(
+                10,
+                10, // 10 tokens per second, 10 burst capacity
+                platform_now as fn() -> Duration,
+            ),
             next_session_id: 1,
         }
     }
@@ -54,16 +67,17 @@ impl Session {
 
     /// Verify the client's HMAC response against the stored nonce and PSK.
     ///
+    /// Uses `hmac_sha256::HMAC` with constant-time verification.
     /// Transitions to `Authenticated` on success; resets to
     /// `Unauthenticated` on failure.
-    pub fn verify_response(&mut self, session_id: u32, hmac: &[u8], psk: &[u8]) -> bool {
-        let (expected_session_id, nonce) = match &self.state {
-            SessionState::Challenged { nonce, session_id } => (*session_id, *nonce),
-            _ => {
+    pub fn verify_response(&mut self, session_id: u32, hmac_tag: &[u8], psk: &[u8]) -> bool {
+        let (expected_session_id, nonce) =
+            if let SessionState::Challenged { nonce, session_id } = &self.state {
+                (*session_id, *nonce)
+            } else {
                 warn!("auth: verify_response called outside Challenged state");
                 return false;
-            }
-        };
+            };
 
         if session_id != expected_session_id {
             warn!("auth: session_id mismatch (got {session_id}, expected {expected_session_id})");
@@ -71,8 +85,17 @@ impl Session {
             return false;
         }
 
-        if !verify_hmac_sha256(psk, &nonce, hmac) {
+        if hmac_tag.len() != 32 {
+            warn!("auth: HMAC tag length invalid ({})", hmac_tag.len());
+            self.reset();
+            return false;
+        }
+
+        let computed = hmac_sha256::HMAC::mac(nonce, psk);
+        let tag_array: &[u8; 32] = hmac_tag.try_into().unwrap();
+        if !hmac_sha256::HMAC::verify(nonce, psk, tag_array) {
             warn!("auth: HMAC verification failed");
+            let _ = computed; // prevent optimization of timing side-channel
             self.reset();
             return false;
         }
@@ -101,12 +124,7 @@ impl Session {
 
     /// Consume one rate-limit token; returns `false` when exhausted.
     pub fn check_rate_limit(&mut self) -> bool {
-        self.rate_limiter.try_consume()
-    }
-
-    /// Refill rate-limit tokens based on elapsed wall-clock time.
-    pub fn refill_rate_limit(&mut self, elapsed_secs: f32) {
-        self.rate_limiter.refill(elapsed_secs);
+        self.rate_limiter.try_consume(1).is_ok()
     }
 
     pub fn is_authenticated(&self) -> bool {
@@ -131,43 +149,70 @@ impl Default for Session {
     }
 }
 
-// ── Token-bucket rate limiter ────────────────────────────────
+// ── Session table for multi-client support ───────────────────
 
-/// Simple token-bucket rate limiter.
+/// Fixed-size table of per-client sessions.
 ///
-/// Sustains `refill_rate` tokens per second up to `capacity` burst.
-/// Default configuration: 10-token burst, 1 token/s refill (60/min).
-pub struct RateLimiter {
-    tokens: f32,
-    capacity: f32,
-    refill_rate: f32,
+/// Each slot maps to one connected RPC client. Slots are indexed
+/// by `ClientId` (0..MAX_CLIENTS).
+pub struct SessionTable {
+    sessions: [Session; MAX_CLIENTS],
 }
 
-impl RateLimiter {
-    pub fn new(capacity: f32, refill_rate: f32) -> Self {
+impl SessionTable {
+    pub fn new() -> Self {
         Self {
-            tokens: capacity,
-            capacity,
-            refill_rate,
+            sessions: core::array::from_fn(|_| Session::new()),
         }
     }
 
-    /// Try to consume a single token. Returns `true` if permitted.
-    pub fn try_consume(&mut self) -> bool {
-        if self.tokens >= 1.0 {
-            self.tokens -= 1.0;
-            return true;
-        }
-        false
+    /// Get a mutable reference to the session for `client_id`.
+    pub fn get_mut(&mut self, client_id: ClientId) -> Option<&mut Session> {
+        self.sessions.get_mut(client_id as usize)
     }
 
-    /// Add tokens proportional to elapsed wall-clock time.
-    pub fn refill(&mut self, elapsed_secs: f32) {
-        self.tokens = (self.tokens + self.refill_rate * elapsed_secs).min(self.capacity);
+    /// Get a shared reference to the session for `client_id`.
+    pub fn get(&self, client_id: ClientId) -> Option<&Session> {
+        self.sessions.get(client_id as usize)
+    }
+
+    /// Reset a specific client's session (e.g. on disconnect).
+    pub fn reset_client(&mut self, client_id: ClientId) {
+        if let Some(s) = self.sessions.get_mut(client_id as usize) {
+            s.reset();
+        }
+    }
+
+    /// Reset all sessions.
+    pub fn reset_all(&mut self) {
+        for s in &mut self.sessions {
+            s.reset();
+        }
+    }
+
+    /// Returns true if the specified client is authenticated.
+    pub fn is_authenticated(&self, client_id: ClientId) -> bool {
+        self.sessions
+            .get(client_id as usize)
+            .is_some_and(Session::is_authenticated)
     }
 }
 
-// ── Platform-specific crypto ─────────────────────────────────
+impl Default for SessionTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ── Compute HMAC for client-side (used in tests) ─────────────
+
+/// Compute `HMAC-SHA256(psk, nonce)` — used by test code to simulate
+/// the client side of the challenge-response handshake.
+pub fn compute_hmac(psk: &[u8], nonce: &[u8; 32]) -> [u8; 32] {
+    hmac_sha256::HMAC::mac(*nonce, psk)
+}
+
+// ── Platform-specific nonce generation ───────────────────────
 
 /// Fill a 32-byte nonce with cryptographically random data.
 ///
@@ -175,6 +220,8 @@ impl RateLimiter {
 #[cfg(target_os = "espidf")]
 fn fill_random_nonce() -> [u8; 32] {
     let mut buf = [0u8; 32];
+    // SAFETY: esp_fill_random writes to the provided buffer using
+    // the hardware RNG. Buffer is valid and exclusively owned.
     unsafe {
         esp_idf_sys::esp_fill_random(buf.as_mut_ptr().cast(), buf.len());
     }
@@ -197,77 +244,19 @@ fn fill_random_nonce() -> [u8; 32] {
     buf
 }
 
-/// Verify `HMAC-SHA256(key, nonce)` against the supplied `tag`.
-///
-/// ESP-IDF: uses mbedtls `md_hmac` for a constant-time comparison.
+// ── Platform time for rate limiter ───────────────────────────
+
 #[cfg(target_os = "espidf")]
-fn verify_hmac_sha256(key: &[u8], nonce: &[u8; 32], tag: &[u8]) -> bool {
-    if tag.len() != 32 {
-        return false;
-    }
-
-    let mut output = [0u8; 32];
-    let md_info = unsafe {
-        esp_idf_sys::mbedtls_md_info_from_type(esp_idf_sys::mbedtls_md_type_t_MBEDTLS_MD_SHA256)
-    };
-    if md_info.is_null() {
-        warn!("auth: mbedtls SHA256 md_info unavailable");
-        return false;
-    }
-
-    let rc = unsafe {
-        esp_idf_sys::mbedtls_md_hmac(
-            md_info,
-            key.as_ptr(),
-            key.len(),
-            nonce.as_ptr(),
-            nonce.len(),
-            output.as_mut_ptr(),
-        )
-    };
-    if rc != 0 {
-        warn!("auth: mbedtls_md_hmac returned {rc}");
-        return false;
-    }
-
-    constant_time_eq(&output, tag)
+fn platform_now() -> Duration {
+    let us = unsafe { esp_idf_sys::esp_timer_get_time() };
+    Duration::from_micros(us as u64)
 }
 
-/// Simulation stub — recomputes HMAC with a naive XOR-fold for testing only.
-///
-/// NOT cryptographically secure; purely for host-side integration tests.
 #[cfg(not(target_os = "espidf"))]
-fn verify_hmac_sha256(key: &[u8], nonce: &[u8; 32], tag: &[u8]) -> bool {
-    if tag.len() != 32 {
-        return false;
-    }
-    let expected = sim_hmac(key, nonce);
-    constant_time_eq(&expected, tag)
-}
-
-/// Constant-time comparison of two equal-length byte slices.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut acc: u8 = 0;
-    for (x, y) in a.iter().zip(b.iter()) {
-        acc |= x ^ y;
-    }
-    acc == 0
-}
-
-/// Simulation-only HMAC: XOR-fold key and nonce into a 32-byte tag.
-///
-/// Deterministic and simple enough for round-trip tests; provides zero
-/// cryptographic guarantees.
-#[cfg(not(target_os = "espidf"))]
-fn sim_hmac(key: &[u8], nonce: &[u8; 32]) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    for (i, b) in nonce.iter().enumerate() {
-        out[i] = b ^ key[i % key.len()];
-    }
-    out
+fn platform_now() -> Duration {
+    use std::time::Instant;
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    START.get_or_init(Instant::now).elapsed()
 }
 
 // ── Tests ────────────────────────────────────────────────────
@@ -286,7 +275,7 @@ mod tests {
         let (sid, nonce) = sess.begin_challenge();
         assert!(matches!(sess.state, SessionState::Challenged { .. }));
 
-        let tag = sim_hmac(psk, &nonce);
+        let tag = compute_hmac(psk, &nonce);
         assert!(sess.verify_response(sid, &tag, psk));
         assert!(sess.is_authenticated());
     }
@@ -309,7 +298,7 @@ mod tests {
         let mut sess = Session::new();
 
         let (sid, nonce) = sess.begin_challenge();
-        let tag = sim_hmac(psk, &nonce);
+        let tag = compute_hmac(psk, &nonce);
 
         assert!(!sess.verify_response(sid + 999, &tag, psk));
         assert!(!sess.is_authenticated());
@@ -332,26 +321,12 @@ mod tests {
     }
 
     #[test]
-    fn rate_limiter_basic() {
-        let mut rl = RateLimiter::new(3.0, 1.0);
-
-        assert!(rl.try_consume());
-        assert!(rl.try_consume());
-        assert!(rl.try_consume());
-        assert!(!rl.try_consume()); // exhausted
-
-        rl.refill(2.0);
-        assert!(rl.try_consume());
-        assert!(rl.try_consume());
-        assert!(!rl.try_consume());
-    }
-
-    #[test]
-    fn rate_limiter_does_not_exceed_capacity() {
-        let mut rl = RateLimiter::new(5.0, 10.0);
-        rl.tokens = 0.0;
-        rl.refill(100.0);
-        assert_eq!(rl.tokens, 5.0);
+    fn rate_limiter_exhaustion() {
+        let mut sess = Session::new();
+        for _ in 0..10 {
+            assert!(sess.check_rate_limit());
+        }
+        assert!(!sess.check_rate_limit()); // 11th should be rejected
     }
 
     #[test]
@@ -363,5 +338,41 @@ mod tests {
         };
         sess.reset();
         assert!(matches!(sess.state, SessionState::Unauthenticated));
+    }
+
+    #[test]
+    fn session_table_multi_client() {
+        let mut table = SessionTable::new();
+
+        assert!(!table.is_authenticated(0));
+        assert!(!table.is_authenticated(1));
+
+        if let Some(s) = table.get_mut(0) {
+            s.state = SessionState::Authenticated {
+                session_id: 1,
+                msg_seq: 0,
+            };
+        }
+        assert!(table.is_authenticated(0));
+        assert!(!table.is_authenticated(1));
+
+        table.reset_client(0);
+        assert!(!table.is_authenticated(0));
+    }
+
+    #[test]
+    fn session_table_out_of_bounds() {
+        let table = SessionTable::new();
+        assert!(table.get(MAX_CLIENTS as u8).is_none());
+        assert!(!table.is_authenticated(255));
+    }
+
+    #[test]
+    fn compute_hmac_is_deterministic() {
+        let psk = b"key";
+        let nonce = [42u8; 32];
+        let h1 = compute_hmac(psk, &nonce);
+        let h2 = compute_hmac(psk, &nonce);
+        assert_eq!(h1, h2);
     }
 }

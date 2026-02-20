@@ -53,13 +53,9 @@ pub enum ScheduleKind {
     },
     /// Continuous scrub for `duration_secs`, then stop.
     /// Intended for "I'm having guests, blast the scrubber for an hour".
-    Boost {
-        duration_secs: u16,
-    },
+    Boost { duration_secs: u16 },
     /// Fire once after `delay_secs`, then auto-disable.
-    OneShot {
-        delay_secs: u32,
-    },
+    OneShot { delay_secs: u32 },
 }
 
 /// Time-of-day restriction (quiet hours).
@@ -149,7 +145,10 @@ impl Scheduler {
     pub fn remove(&mut self, slot: usize) {
         if slot < MAX_SCHEDULES {
             if let Some(entry) = &self.schedules[slot] {
-                info!("Scheduler: removed '{}' from slot {}", entry.schedule.label, slot);
+                info!(
+                    "Scheduler: removed '{}' from slot {}",
+                    entry.schedule.label, slot
+                );
             }
             self.schedules[slot] = None;
         }
@@ -200,7 +199,7 @@ impl Scheduler {
             .and_then(|h| self.quiet_hours.map(|q| q.is_quiet(h)))
             .unwrap_or(false);
 
-        for slot in self.schedules.iter_mut() {
+        for slot in &mut self.schedules {
             let entry = match slot {
                 Some(e) if e.schedule.enabled => e,
                 _ => continue,
@@ -219,10 +218,8 @@ impl Scheduler {
                             "Scheduler: '{}' periodic fire (every {}s)",
                             entry.schedule.label, interval_secs
                         );
-                        delegate.on_schedule_fired(
-                            entry.schedule.label,
-                            ScheduleFiredKind::Periodic,
-                        );
+                        delegate
+                            .on_schedule_fired(entry.schedule.label, ScheduleFiredKind::Periodic);
                         entry.elapsed_ticks = 0;
                     }
                 }
@@ -236,10 +233,7 @@ impl Scheduler {
                             "Scheduler: '{}' boost started ({}s)",
                             entry.schedule.label, duration_secs
                         );
-                        delegate.on_schedule_fired(
-                            entry.schedule.label,
-                            ScheduleFiredKind::Boost,
-                        );
+                        delegate.on_schedule_fired(entry.schedule.label, ScheduleFiredKind::Boost);
                     }
 
                     if let Some(ref mut remaining) = entry.remaining_ticks {
@@ -258,10 +252,8 @@ impl Scheduler {
                             "Scheduler: '{}' one-shot fired (after {}s)",
                             entry.schedule.label, delay_secs
                         );
-                        delegate.on_schedule_fired(
-                            entry.schedule.label,
-                            ScheduleFiredKind::OneShot,
-                        );
+                        delegate
+                            .on_schedule_fired(entry.schedule.label, ScheduleFiredKind::OneShot);
                         entry.fired = true;
                         entry.schedule.enabled = false; // Auto-disable.
                     }
@@ -274,7 +266,7 @@ impl Scheduler {
     pub fn active_count(&self) -> usize {
         self.schedules
             .iter()
-            .filter(|s| s.as_ref().map_or(false, |e| e.schedule.enabled))
+            .filter(|s| s.as_ref().is_some_and(|e| e.schedule.enabled))
             .count()
     }
 }

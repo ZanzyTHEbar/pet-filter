@@ -29,7 +29,10 @@ impl Watchdog {
                 };
                 let ret = esp_task_wdt_reconfigure(&cfg);
                 if ret != ESP_OK {
-                    log::warn!("TWDT reconfigure returned {} (may already be configured)", ret);
+                    log::warn!(
+                        "TWDT reconfigure returned {} (may already be configured)",
+                        ret
+                    );
                 }
 
                 let ret = esp_task_wdt_add(core::ptr::null_mut());
@@ -56,7 +59,9 @@ impl Watchdog {
         #[cfg(target_os = "espidf")]
         {
             if self.subscribed {
-                unsafe { esp_task_wdt_reset(); }
+                unsafe {
+                    esp_task_wdt_reset();
+                }
             }
         }
     }

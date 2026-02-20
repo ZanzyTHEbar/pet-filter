@@ -32,40 +32,46 @@ mod power;
 mod safety;
 mod scheduler;
 
-pub mod app;
 mod adapters;
+pub mod app;
+mod control;
+pub mod diagnostics;
 mod drivers;
 pub mod fsm;
-mod sensors;
-mod control;
 pub mod rpc;
-pub mod diagnostics;
+mod sensors;
 
 // ── Imports ───────────────────────────────────────────────────
 use anyhow::Result;
 use log::{info, warn};
 
+use adapters::ble::{BleAdapter, ProvisioningPort};
+use adapters::device_id;
 use adapters::hardware::HardwareAdapter;
 use adapters::log_sink::LogEventSink;
+use adapters::mdns::MdnsAdapter;
 use adapters::nvs::NvsAdapter;
+use adapters::rpc_adapter::RpcEventSink;
 use adapters::time::Esp32TimeAdapter;
+use adapters::wifi::{ConnectivityPort, WifiAdapter};
 use app::commands::AppCommand;
 use app::events::AppEvent;
-use app::ports::{ActuatorPort, ConfigPort, EventSink, ScheduleFiredKind, SchedulerDelegate, SensorPort};
+use app::ports::{
+    ActuatorPort, ConfigPort, EventSink, ScheduleFiredKind, SchedulerDelegate, SensorPort,
+};
 use app::service::AppService;
 use config::SystemConfig;
+use drivers::button::{ButtonDriver, ButtonEvent};
+use drivers::led_patterns::{
+    COLOUR_ACTIVE, COLOUR_IDLE, COLOUR_PURGING, COLOUR_SENSING, LedPatternEngine, PatternId,
+};
 use drivers::pump::PumpDriver;
 use drivers::status_led::StatusLed;
 use drivers::uvc::UvcDriver;
-use events::{push_event, Event};
+use events::{Event, push_event};
 use fsm::StateId;
 use power::{PowerManager, PowerMode, WakeReason};
-use adapters::device_id;
-use adapters::ble::{BleAdapter, ProvisioningPort};
-use adapters::mdns::MdnsAdapter;
-use adapters::wifi::{WifiAdapter, ConnectivityPort};
-use drivers::button::{ButtonDriver, ButtonEvent};
-use drivers::led_patterns::{LedPatternEngine, PatternId, COLOUR_IDLE, COLOUR_SENSING, COLOUR_ACTIVE, COLOUR_PURGING};
+use rpc::auth::MAX_CLIENTS;
 use scheduler::Scheduler;
 
 // ── Scheduler delegate ────────────────────────────────────────
@@ -92,7 +98,14 @@ fn main() -> Result<()> {
     esp_idf_logger::init()?;
 
     info!("╔══════════════════════════════════════╗");
-    info!("║  PetFilter v{}                       ║", env!("CARGO_PKG_VERSION"));
+    info!(
+        "║  PetFilter v{}                       ║",
+        env!("CARGO_PKG_VERSION")
+    );
+    info!(
+        "║  Built: {}                ║",
+        option_env!("BUILD_TIMESTAMP").unwrap_or("dev")
+    );
     info!("╚══════════════════════════════════════╝");
 
     // ── 1b. OTA rollback check ─────────────────────────────────
@@ -117,7 +130,10 @@ fn main() -> Result<()> {
     let mut nvs = match NvsAdapter::new() {
         Ok(n) => n,
         Err(e) => {
-            warn!("NVS init failed ({}), running with defaults and no persistence", e);
+            warn!(
+                "NVS init failed ({}), running with defaults and no persistence",
+                e
+            );
             // Continue without NVS — config will not be persisted this session.
             // On next reboot, NVS should self-heal.
             NvsAdapter::default()
@@ -169,10 +185,7 @@ fn main() -> Result<()> {
             pins::WATER_LEVEL_A_GPIO,
             pins::WATER_LEVEL_B_GPIO,
         ),
-        sensors::temperature::TemperatureSensor::new(
-            pins::TEMP_ADC_GPIO,
-            config.max_temperature_c,
-        ),
+        sensors::temperature::TemperatureSensor::new(pins::TEMP_ADC_GPIO, config.max_temperature_c),
         pins::UVC_INTERLOCK_GPIO,
     );
 
@@ -184,6 +197,7 @@ fn main() -> Result<()> {
     );
 
     let mut log_sink = LogEventSink::new();
+    let mut rpc_sink = RpcEventSink::new();
     let mut sched = Scheduler::new();
     let mut sched_delegate = EventQueueDelegate;
 
@@ -200,15 +214,52 @@ fn main() -> Result<()> {
     let mut led_engine = LedPatternEngine::new();
     led_engine.set_fsm_pattern(COLOUR_IDLE, PatternId::Solid);
 
+    // ── WiFi station adapter ──────────────────────────────────
+    if let Err(e) = adapters::wifi::wifi_stack_init() {
+        warn!("WiFi stack init failed: {} — WiFi unavailable", e);
+    }
+    let mut wifi = WifiAdapter::new();
+
+    // ── Boot-time WiFi auto-reconnect ─────────────────────────
+    let mut wifi_connected_on_boot = false;
+    {
+        let mut ssid_buf = [0u8; 32];
+        let mut pass_buf = [0u8; 64];
+        if let (Ok(ssid_len), Ok(pass_len)) = (
+            nvs.read_credential("wifi_ssid", &mut ssid_buf),
+            nvs.read_credential("wifi_pass", &mut pass_buf),
+        ) {
+            if let (Ok(ssid), Ok(pass)) = (
+                core::str::from_utf8(&ssid_buf[..ssid_len]),
+                core::str::from_utf8(&pass_buf[..pass_len]),
+            ) {
+                info!("Boot: stored WiFi credentials for '{}' — connecting", ssid);
+                if wifi.set_credentials(ssid, pass).is_ok() {
+                    match wifi.connect() {
+                        Ok(()) => {
+                            info!("Boot: WiFi connected to '{}'", ssid);
+                            wifi_connected_on_boot = true;
+                        }
+                        Err(e) => warn!("Boot: WiFi connect failed ({}), falling back to BLE", e),
+                    }
+                }
+            }
+        }
+    }
+
     // ── BLE provisioning adapter ──────────────────────────────
     let mut ble = BleAdapter::new(dev_hostname.clone());
-    ble.start();
-
-    // ── WiFi station adapter ──────────────────────────────────
-    let mut wifi = WifiAdapter::new();
+    if !wifi_connected_on_boot {
+        ble.start();
+    } else {
+        info!("Boot: skipping BLE (WiFi already connected)");
+    }
 
     // ── mDNS service advertisement ────────────────────────────
     let mut mdns = MdnsAdapter::new(dev_hostname.clone(), dev_id.clone());
+    if wifi_connected_on_boot {
+        mdns.start();
+    }
 
     // ── 6. Construct app service ──────────────────────────────
     let mut app = AppService::new(config.clone());
@@ -219,13 +270,35 @@ fn main() -> Result<()> {
         app.start(&mut log_sink);
     }
 
-    // ── 6b. RPC engine ────────────────────────────────────────
-    // TLS transport is initialized with a NullTransport placeholder;
-    // the real TlsTransport (PSK-over-TCP) will replace this in QA-1.
-    // PSK will be derived from device secret in NVS once config is extended.
-    let rpc_transport = rpc::transport::NullTransport;
-    let mut rpc_engine = rpc::engine::RpcEngine::new(rpc_transport, b"default-psk-change-me");
+    // ── 6b. RPC engine + I/O task ──────────────────────────────
+    let rpc_psk = b"default-psk-change-me";
+    let mut rpc_engine = rpc::engine::RpcEngine::new(rpc_psk);
     rpc_engine.init_crash_log(&nvs);
+
+    // TLS transport — multi-client server on port 4242.
+    // Ownership moves to the I/O task thread; main loop communicates
+    // via embassy-sync channels (CMD_CHANNEL / RESP_CHANNEL).
+    let tls_transport = match adapters::tls_transport::TlsTransport::new(
+        adapters::tls_transport::DEFAULT_PORT,
+        rpc_psk,
+    ) {
+        Ok(t) => {
+            info!(
+                "TLS: listening on port {}",
+                adapters::tls_transport::DEFAULT_PORT
+            );
+            Some(t)
+        }
+        Err(e) => {
+            warn!("TLS transport init failed: {} — RPC unavailable", e);
+            None
+        }
+    };
+    let _io_handle = tls_transport.map(|t| rpc::io_task::spawn(t));
+
+    // Register this task for FreeRTOS notification-based wake.
+    // On ESP-IDF, main() runs on Core 1 (APP_CPU) per sdkconfig.
+    events::register_main_task();
 
     info!("System ready. Entering event loop.");
 
@@ -234,14 +307,17 @@ fn main() -> Result<()> {
     let mut telemetry_counter: u64 = 0;
 
     loop {
-        // Simulate timer interrupts via sleep on non-espidf targets.
-        // On real hardware, the CPU executes WFI (Wait For Interrupt)
-        // and wakes only when a hardware timer or GPIO interrupt fires.
+        // Block until a push_event() notification arrives or timeout expires.
+        // On ESP-IDF: ulTaskNotifyTake suspends the task, allowing the
+        // FreeRTOS idle task to run PM hooks (automatic light sleep).
+        // Wakes instantly when any ISR/timer/software calls push_event().
+        // On simulation: sleeps for the control interval then injects ControlTick.
+        #[cfg(target_os = "espidf")]
+        events::wait_for_event(100);
+
         #[cfg(not(target_os = "espidf"))]
         {
-            std::thread::sleep(std::time::Duration::from_millis(
-                config.control_loop_interval_ms as u64,
-            ));
+            events::wait_for_event(config.control_loop_interval_ms as u32);
             push_event(Event::ControlTick);
         }
 
@@ -262,6 +338,11 @@ fn main() -> Result<()> {
             match event {
                 Event::ControlTick => {
                     app.tick(&mut hw, &mut log_sink);
+                    if rpc_engine.ota_mut().has_pending() {
+                        if let Err(e) = rpc_engine.ota_mut().flush_pending() {
+                            warn!("OTA flush failed: {}", e);
+                        }
+                    }
                     if app.state() != StateId::Idle {
                         activity = true;
                     }
@@ -273,7 +354,16 @@ fn main() -> Result<()> {
 
                 Event::TelemetryTick => {
                     let t = app.build_telemetry();
-                    log_sink.emit(&AppEvent::Telemetry(t));
+                    log_sink.emit(&AppEvent::Telemetry(t.clone()));
+                    rpc_sink.emit(&AppEvent::Telemetry(t));
+                    let tick_ms = config.telemetry_interval_secs as u32 * 1000;
+                    for cid in 0..MAX_CLIENTS as u8 {
+                        if rpc_engine.should_stream_telemetry(cid, tick_ms) {
+                            if let Some(frame) = rpc_engine.build_telemetry_frame(cid, &app) {
+                                rpc::io_task::send_response(frame.client_id, frame.data);
+                            }
+                        }
+                    }
                 }
 
                 Event::SafetyFault => {
@@ -297,7 +387,23 @@ fn main() -> Result<()> {
                 }
 
                 Event::CommandReceived => {
-                    rpc_engine.poll(&mut app, &mut hw, &mut log_sink, &mut nvs);
+                    while let Some(cmd) = rpc::io_task::try_recv_command() {
+                        if let Some(resp) = rpc_engine.dispatch(
+                            cmd.client_id,
+                            &cmd.frame,
+                            &mut app,
+                            &mut hw,
+                            &mut log_sink,
+                            &mut nvs,
+                        ) {
+                            rpc::io_task::send_response(resp.client_id, resp.data);
+                        }
+                    }
+                    while let Some(disc) = rpc::io_task::try_recv_disconnect() {
+                        info!("RPC: client {} disconnected", disc.client_id);
+                        rpc_engine.reset_client(disc.client_id);
+                        rpc_sink.unsubscribe(disc.client_id);
+                    }
                     activity = true;
                 }
 
@@ -308,14 +414,54 @@ fn main() -> Result<()> {
                 }
 
                 Event::ButtonLongPress => {
-                    info!("Button: long press → factory reset");
-                    // Factory reset: erase NVS + restart into provisioning
-                    // Wired in P1-6g when NVS erase is available.
+                    warn!("Button: long press → FACTORY RESET");
+                    let _ = nvs.erase_credentials();
+                    let _ = nvs.delete("wifi_ssid");
+                    let _ = nvs.delete("wifi_pass");
+                    info!("Factory reset: credentials erased, restarting...");
+                    #[cfg(target_os = "espidf")]
+                    unsafe {
+                        esp_idf_svc::sys::esp_restart();
+                    }
                     activity = true;
                 }
 
                 Event::ButtonDoublePress => {
                     info!("Button: double press → boost mode toggle");
+                    activity = true;
+                }
+
+                Event::BleConnected => {
+                    ble.on_central_connected();
+                    activity = true;
+                }
+
+                Event::BleDisconnected => {
+                    ble.on_central_disconnected();
+                }
+
+                Event::BleSsidWrite => {
+                    if let Some(data) = adapters::ble::take_ssid_data() {
+                        if let Err(e) = ble.on_ssid_write(&data) {
+                            warn!("BLE: SSID write rejected: {}", e);
+                        }
+                    }
+                    activity = true;
+                }
+                Event::BlePasswordWrite => {
+                    if let Some(data) = adapters::ble::take_pass_data() {
+                        if let Err(e) = ble.on_password_write(&data) {
+                            warn!("BLE: password write rejected: {}", e);
+                        }
+                    }
+                    activity = true;
+                }
+                Event::BlePskWrite => {
+                    if let Some(data) = adapters::ble::take_psk_data() {
+                        if let Err(e) = ble.on_psk_write(&data) {
+                            warn!("BLE: PSK write rejected: {}", e);
+                        }
+                    }
                     activity = true;
                 }
 
@@ -327,9 +473,15 @@ fn main() -> Result<()> {
         let now_ms = (time_adapter.uptime_us() / 1000) as u32;
         if let Some(gesture) = button.tick(now_ms) {
             match gesture {
-                ButtonEvent::ShortPress => { push_event(Event::ButtonShortPress); }
-                ButtonEvent::LongPress => { push_event(Event::ButtonLongPress); }
-                ButtonEvent::DoublePress => { push_event(Event::ButtonDoublePress); }
+                ButtonEvent::ShortPress => {
+                    push_event(Event::ButtonShortPress);
+                }
+                ButtonEvent::LongPress => {
+                    push_event(Event::ButtonLongPress);
+                }
+                ButtonEvent::DoublePress => {
+                    push_event(Event::ButtonDoublePress);
+                }
             }
         }
 
@@ -358,7 +510,14 @@ fn main() -> Result<()> {
                     ble.stop();
                     match wifi.connect() {
                         Ok(()) => {
-                            info!("Provisioning: WiFi connected, starting mDNS + TLS listener");
+                            info!("Provisioning: WiFi connected, persisting credentials");
+                            if let Err(e) = nvs.store_credential("wifi_ssid", ssid.as_bytes()) {
+                                warn!("Failed to persist WiFi SSID: {:?}", e);
+                            }
+                            if let Err(e) = nvs.store_credential("wifi_pass", password.as_bytes()) {
+                                warn!("Failed to persist WiFi password: {:?}", e);
+                            }
+                            info!("Provisioning: starting mDNS + TLS listener");
                             mdns.start();
                         }
                         Err(e) => {
@@ -369,10 +528,11 @@ fn main() -> Result<()> {
                 }
             }
 
-            // Store PSK if received via BLE
-            if let Some(_psk) = ble.take_pending_psk() {
+            if let Some(psk) = ble.take_pending_psk() {
                 info!("Provisioning: PSK received, storing in encrypted NVS");
-                // nvs.write("auth", "psk", &psk).ok();
+                if let Err(e) = nvs.store_credential("psk", &psk) {
+                    warn!("Failed to store PSK: {:?}", e);
+                }
             }
         }
 
@@ -389,12 +549,23 @@ fn main() -> Result<()> {
         if let Some(mode) = power_mgr.tick(activity) {
             match mode {
                 PowerMode::LightSleep if app.state() == StateId::Idle => {
+                    mdns.stop();
                     hw.all_off();
+                    watchdog.feed();
                     let _wake = power_mgr.enter_light_sleep(60);
+                    // Re-announce on wake
+                    if wifi.is_connected() {
+                        mdns.start();
+                    }
                 }
                 PowerMode::DeepSleep if app.state() == StateId::Idle => {
+                    info!("Entering deep sleep — graceful shutdown");
+                    mdns.stop();
+                    wifi.disconnect();
+                    ble.stop();
                     app.force_save_if_dirty(&nvs);
                     hw.all_off();
+                    watchdog.feed();
                     power_mgr.enter_deep_sleep(500);
                 }
                 _ => {}
