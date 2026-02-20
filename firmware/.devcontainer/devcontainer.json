@@ -5,27 +5,42 @@
     "context": ".."
   },
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
-  "workspaceFolder": "/workspace/firmware",
+  "workspaceFolder": "/workspace",
   "containerUser": "esp",
   "remoteEnv": {
     "LIBCLANG_PATH": "/home/esp/.rustup/toolchains/esp/xtensa-esp32-elf-clang/esp-20.1.1_20250829/esp-clang/lib",
-    "ESP_IDF_TOOLS_INSTALL_DIR": "global"
+    "ESP_IDF_TOOLS_INSTALL_DIR": "global",
+    "PATH": "/home/esp/.wokwi/bin:/home/esp/bin:/home/esp/.espressif/tools/riscv32-esp-elf/esp-13.2.0_20230928/riscv32-esp-elf/bin:${containerEnv:PATH}"
   },
   "mounts": [
     "source=petfilter-cargo-registry,target=/home/esp/.cargo/registry,type=volume",
     "source=petfilter-cargo-git,target=/home/esp/.cargo/git,type=volume",
     "source=petfilter-esp-idf,target=/home/esp/.espressif,type=volume",
-    "source=petfilter-target,target=/workspace/firmware/target,type=volume"
+    "source=petfilter-target,target=/workspace/target,type=volume"
   ],
   "forwardPorts": [
     9012,
+    9013,
     4242,
     8000
   ],
   "portsAttributes": {
-    "9012": { "label": "Wokwi GDB", "onAutoForward": "silent" },
-    "4242": { "label": "RPC TLS", "onAutoForward": "silent" },
-    "8000": { "label": "web-flash", "onAutoForward": "notify" }
+    "9012": {
+      "label": "Wokwi GDB",
+      "onAutoForward": "silent"
+    },
+    "9013": {
+      "label": "Wokwi Host Bridge",
+      "onAutoForward": "notify"
+    },
+    "4242": {
+      "label": "RPC TLS",
+      "onAutoForward": "silent"
+    },
+    "8000": {
+      "label": "web-flash",
+      "onAutoForward": "notify"
+    }
   },
   "customizations": {
     "vscode": {
@@ -53,7 +68,7 @@
       ]
     }
   },
-  "postStartCommand": "sudo /bin/chown -R esp:esp /workspace/firmware/target && sudo /bin/chown -R esp:esp /home/esp/.espressif && sudo /bin/chown -R esp:esp /home/esp/.cargo",
-  "postCreateCommand": "rustc --version && cargo --version && flatc --version && echo 'PetFilter devcontainer ready'",
+  "postStartCommand": "sudo /bin/chown -R esp:esp /workspace/target && sudo /bin/chown -R esp:esp /home/esp/.espressif && sudo /bin/chown -R esp:esp /home/esp/.cargo",
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
   "shutdownAction": "stopContainer"
 }

@@ -18,6 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3-pip \
         unzip \
         wget \
+        nodejs \
+        npm \
     && rm -rf /var/lib/apt/lists/*
 
 # Install FlatBuffers compiler (asset name: Linux.flatc.binary.clang++-18.zip)
@@ -34,17 +36,18 @@ RUN echo 'source /home/esp/export-esp.sh' >> /etc/bash.bashrc && \
     chmod +x /etc/profile.d/esp-toolchain.sh
 
 # Allow esp user to fix volume mount ownership at runtime
-RUN echo 'esp ALL=(root) NOPASSWD: /bin/chown -R esp\:esp /workspace/firmware/target, /bin/chown -R esp\:esp /home/esp/.espressif, /bin/chown -R esp\:esp /home/esp/.cargo' \
-    >> /etc/sudoers.d/esp-volumes && \
-    chmod 0440 /etc/sudoers.d/esp-volumes && \
-    apt-get update && apt-get install -y --no-install-recommends sudo && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends sudo && rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /etc/sudoers.d && \
+    echo 'esp ALL=(root) NOPASSWD: /bin/chown -R esp\:esp /workspace/target, /bin/chown -R esp\:esp /home/esp/.espressif, /bin/chown -R esp\:esp /home/esp/.cargo' \
+    > /etc/sudoers.d/esp-volumes && \
+    chmod 0440 /etc/sudoers.d/esp-volumes
 
 # Pre-create cargo registry / git cache directories for volume caching
 RUN mkdir -p /home/esp/.cargo/registry /home/esp/.cargo/git && \
     chown -R esp:esp /home/esp/.cargo
 
 USER esp
-WORKDIR /workspace/firmware
+WORKDIR /workspace
 
 # Source the toolchain env for build commands (non-interactive shells)
 ENV LIBCLANG_PATH="/home/esp/.rustup/toolchains/esp/xtensa-esp32-elf-clang/esp-20.1.1_20250829/esp-clang/lib"
@@ -57,11 +60,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libglib2.0-0 \
         libpixman-1-0 \
         libslirp0 \
+        libsdl2-2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install QEMU from ESP-IDF tools (supports ESP32-S3 xtensa)
-RUN bash -c 'source /home/esp/export-esp.sh && python3 $IDF_PATH/tools/idf_tools.py install qemu-xtensa && echo "QEMU installed"' \
-    || echo "QEMU install skipped (may need manual install)"
+# ESP-IDF tools (qemu-xtensa + riscv32-esp-elf) are installed in postCreateCommand
+# after the /home/esp/.espressif volume is mounted and IDF_PATH is valid.
+RUN echo "ESP-IDF tools install deferred to postCreateCommand"
 
 # Install just (task runner)
 RUN curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
