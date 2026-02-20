@@ -20,7 +20,7 @@
 //! 4. `disconnect(client_id)` tears down a specific connection.
 
 use core::fmt;
-use log::{info, warn};
+use log::info;
 
 use crate::rpc::auth::{ClientId, MAX_CLIENTS};
 use crate::rpc::transport::Transport;
@@ -126,8 +126,9 @@ impl ClientSlot {
 // ───────────────────────────────────────────────────────────────
 
 /// Multi-client TLS 1.3 server transport.
-#[allow(dead_code)]
 pub struct TlsTransport {
+    /// Stored for TLS context; not read after init (sensitive).
+    #[allow(dead_code)]
     psk: heapless::Vec<u8, MAX_PSK_LEN>,
     port: u16,
     clients: [ClientSlot; MAX_CLIENTS],
@@ -140,6 +141,11 @@ pub struct TlsTransport {
 }
 
 impl TlsTransport {
+    /// Listening port (for diagnostics).
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
     #[cfg(target_os = "espidf")]
     pub fn new(port: u16, psk: &[u8]) -> Result<Self, TlsTransportError> {
         let mut psk_buf = heapless::Vec::new();

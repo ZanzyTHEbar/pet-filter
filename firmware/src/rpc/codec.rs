@@ -86,6 +86,12 @@ pub struct FrameDecoder {
     last_header: FrameHeader,
 }
 
+impl Default for FrameDecoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FrameDecoder {
     pub fn new() -> Self {
         Self {

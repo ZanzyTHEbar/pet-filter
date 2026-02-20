@@ -30,6 +30,9 @@ use super::fb;
 use super::ota::OtaManager;
 use crate::adapters::cert_store::{CertStore, TlsMode as CertTlsMode};
 
+const OTA_VERSION_NAMESPACE: &str = "ota";
+const OTA_VERSION_KEY: &str = "fw_version";
+
 /// Response frame produced by the engine, tagged with destination client.
 pub struct ResponseFrame {
     pub client_id: ClientId,
@@ -50,6 +53,7 @@ pub struct RpcEngine {
     ulp_wake_count: u32,
     crash_log: CrashLog,
     cert_store: CertStore,
+    ota_pending_version: Option<u32>,
 }
 
 impl RpcEngine {
@@ -71,6 +75,7 @@ impl RpcEngine {
             ulp_wake_count: 0,
             crash_log: CrashLog::new(),
             cert_store: CertStore::new(CertTlsMode::PskOnly),
+            ota_pending_version: None,
         }
     }
 
@@ -129,13 +134,14 @@ impl RpcEngine {
         &mut self,
         client_id: ClientId,
         app: &AppService,
+        wifi_rssi: Option<i8>,
     ) -> Option<ResponseFrame> {
         let idx = client_id as usize;
         if idx >= MAX_CLIENTS || !self.telemetry_subscribed[idx] {
             return None;
         }
 
-        let telem = app.build_telemetry();
+        let telem = app.build_telemetry(wifi_rssi);
         let mut fbb = FlatBufferBuilder::with_capacity(256);
 
         let tf = fb::TelemetryFrame::create(
@@ -150,6 +156,7 @@ impl RpcEngine {
                 pump_duty: telem.pump_duty,
                 uvc_duty: telem.uvc_duty,
                 fault_flags: telem.fault_flags,
+                wifi_rssi: telem.wifi_rssi.unwrap_or(127),
             },
         );
 
@@ -414,9 +421,37 @@ impl RpcEngine {
             fb::Payload::OtaBeginRequest => {
                 if let Some(req) = msg.payload_as_ota_begin_request() {
                     let sha = req.sha256().map_or(&[] as &[u8], |v| v.bytes());
+                    let version = req.version();
+                    info!(
+                        "RPC[{}]: OTA begin requested (size={}, version={})",
+                        client_id,
+                        req.firmware_size(),
+                        version
+                    );
+
+                    let current_version = Self::read_monotonic_fw_version(nvs);
+                    if version <= current_version {
+                        warn!(
+                            "RPC[{}]: OTA rollback rejected (incoming={}, current={})",
+                            client_id,
+                            version,
+                            current_version
+                        );
+                        return self.build_ack(
+                            client_id,
+                            reply_to,
+                            false,
+                            "rollback rejected: version must increase",
+                        );
+                    }
+
                     match self.ota.begin(req.firmware_size(), sha) {
-                        Ok(()) => self.build_ack(client_id, reply_to, true, "OTA started"),
+                        Ok(()) => {
+                            self.ota_pending_version = Some(version);
+                            self.build_ack(client_id, reply_to, true, "OTA started")
+                        }
                         Err(e) => {
+                            self.ota_pending_version = None;
                             let mut buf = heapless::String::<64>::new();
                             let _ = core::fmt::Write::write_fmt(&mut buf, format_args!("{}", e));
                             self.build_ack(client_id, reply_to, false, buf.as_str())
@@ -458,6 +493,22 @@ impl RpcEngine {
 
             fb::Payload::OtaFinalizeRequest => match self.ota.finalize() {
                 Ok(()) => {
+                    if let Some(version) = self.ota_pending_version.take() {
+                        if !Self::write_monotonic_fw_version(nvs, version) {
+                            warn!(
+                                "RPC[{}]: OTA finalized but failed to persist version {}",
+                                client_id,
+                                version
+                            );
+                            return self.build_ack(
+                                client_id,
+                                reply_to,
+                                false,
+                                "OTA finalize failed: version persist error",
+                            );
+                        }
+                    }
+
                     #[allow(unused_variables)]
                     let resp =
                         self.build_ack(client_id, reply_to, true, "OTA finalized, rebooting");
@@ -466,6 +517,7 @@ impl RpcEngine {
                     resp
                 }
                 Err(e) => {
+                    self.ota_pending_version = None;
                     let mut buf = heapless::String::<64>::new();
                     let _ = core::fmt::Write::write_fmt(&mut buf, format_args!("{}", e));
                     self.build_ack(client_id, reply_to, false, buf.as_str())
@@ -504,6 +556,25 @@ impl RpcEngine {
             }
         }
     }
+
+    fn read_monotonic_fw_version(nvs: &dyn StoragePort) -> u32 {
+        let mut buf = [0u8; 8];
+        match nvs.read(OTA_VERSION_NAMESPACE, OTA_VERSION_KEY, &mut buf) {
+            Ok(4) => u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]),
+            Ok(_) => {
+                warn!("RPC: invalid stored OTA version length");
+                0
+            }
+            Err(_) => 0,
+        }
+    }
+
+    fn write_monotonic_fw_version(nvs: &mut dyn StoragePort, version: u32) -> bool {
+        let bytes = version.to_le_bytes();
+        nvs.write(OTA_VERSION_NAMESPACE, OTA_VERSION_KEY, &bytes)
+            .is_ok()
+    }
+
 
     // ── Auth handlers ─────────────────────────────────────────
 
@@ -615,7 +686,7 @@ impl RpcEngine {
         app: &AppService,
         reply_to: u32,
     ) -> Option<ResponseFrame> {
-        let telem = app.build_telemetry();
+        let telem = app.build_telemetry(None);
         let mut fbb = FlatBufferBuilder::with_capacity(128);
 
         let sr = fb::StatusResponse::create(

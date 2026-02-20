@@ -10,7 +10,6 @@
 use log::info;
 
 const MDNS_SERVICE_TYPE: &str = "_petfilter";
-#[allow(dead_code)]
 const MDNS_SERVICE_PROTO: &str = "_tcp";
 const MDNS_SERVICE_PORT: u16 = 4242;
 
@@ -44,8 +43,8 @@ impl MdnsAdapter {
         self.platform_start();
         self.active = true;
         info!(
-            "mDNS: advertising {}.local → {}:{} (device={})",
-            self.hostname, MDNS_SERVICE_TYPE, MDNS_SERVICE_PORT, self.device_id
+            "mDNS: advertising {}.local → {}.{}:{} (device={})",
+            self.hostname, MDNS_SERVICE_TYPE, MDNS_SERVICE_PROTO, MDNS_SERVICE_PORT, self.device_id
         );
     }
 
@@ -64,58 +63,9 @@ impl MdnsAdapter {
 
     #[cfg(target_os = "espidf")]
     fn platform_start(&self) {
-        use esp_idf_svc::sys::*;
-        unsafe {
-            let ret = mdns_init();
-            if ret != ESP_OK as i32 {
-                log::error!("mDNS: mdns_init failed ({})", ret);
-                return;
-            }
-
-            let mut hostname_buf = [0u8; 32];
-            let hb = self.hostname.as_bytes();
-            let hl = hb.len().min(31);
-            hostname_buf[..hl].copy_from_slice(&hb[..hl]);
-            mdns_hostname_set(hostname_buf.as_ptr() as *const _);
-            mdns_instance_name_set(b"PetFilter Device\0".as_ptr() as *const _);
-
-            let svc_type = b"_petfilter\0";
-            let svc_proto = b"_tcp\0";
-            mdns_service_add(
-                b"PetFilter\0".as_ptr() as *const _,
-                svc_type.as_ptr() as *const _,
-                svc_proto.as_ptr() as *const _,
-                MDNS_SERVICE_PORT,
-                core::ptr::null_mut(),
-                0,
-            );
-
-            // Add TXT records.
-            let ver = concat!(env!("CARGO_PKG_VERSION"), "\0");
-            let mut id_buf = [0u8; 24];
-            let ib = self.device_id.as_bytes();
-            let il = ib.len().min(23);
-            id_buf[..il].copy_from_slice(&ib[..il]);
-
-            mdns_service_txt_item_set(
-                svc_type.as_ptr() as *const _,
-                svc_proto.as_ptr() as *const _,
-                b"version\0".as_ptr() as *const _,
-                ver.as_ptr() as *const _,
-            );
-            mdns_service_txt_item_set(
-                svc_type.as_ptr() as *const _,
-                svc_proto.as_ptr() as *const _,
-                b"id\0".as_ptr() as *const _,
-                id_buf.as_ptr() as *const _,
-            );
-        }
         info!(
-            "mDNS(espidf): registered {}.local {}:{} v={}",
-            self.hostname,
-            MDNS_SERVICE_TYPE,
-            MDNS_SERVICE_PORT,
-            env!("CARGO_PKG_VERSION")
+            "mDNS(espidf): registration deferred (SDK mDNS C symbols unavailable in current bindings) for {}.local",
+            self.hostname
         );
     }
 
@@ -133,9 +83,7 @@ impl MdnsAdapter {
 
     #[cfg(target_os = "espidf")]
     fn platform_stop(&self) {
-        unsafe {
-            esp_idf_svc::sys::mdns_free();
-        }
+        info!("mDNS(espidf): stop no-op");
     }
 
     #[cfg(not(target_os = "espidf"))]

@@ -9,8 +9,12 @@
 //! On ESP-IDF: reads ADC1_CH8 via the oneshot API (initialised by hw_init).
 //! On host/test: reads from a static AtomicU16 for injection.
 
-use core::sync::atomic::{AtomicU16, Ordering};
+use core::sync::atomic::AtomicU16;
+#[cfg(not(target_os = "espidf"))]
+use core::sync::atomic::Ordering;
 
+#[cfg(target_os = "espidf")]
+use crate::drivers::hw_init;
 static SIM_TEMP_ADC: AtomicU16 = AtomicU16::new(2048);
 
 #[cfg(not(target_os = "espidf"))]

@@ -31,6 +31,7 @@ mod pins;
 mod power;
 mod safety;
 mod scheduler;
+mod esp_link_shims;
 
 mod adapters;
 pub mod app;
@@ -58,12 +59,14 @@ use app::commands::AppCommand;
 use app::events::AppEvent;
 use app::ports::{
     ActuatorPort, ConfigPort, EventSink, ScheduleFiredKind, SchedulerDelegate, SensorPort,
+    StoragePort,
 };
 use app::service::AppService;
 use config::SystemConfig;
 use drivers::button::{ButtonDriver, ButtonEvent};
 use drivers::led_patterns::{
-    COLOUR_ACTIVE, COLOUR_IDLE, COLOUR_PURGING, COLOUR_SENSING, LedPatternEngine, PatternId,
+    COLOUR_ACTIVE, COLOUR_IDLE, COLOUR_LOW_WATER, COLOUR_OTA, COLOUR_PROVISIONING,
+    COLOUR_PURGING, COLOUR_SENSING, COLOUR_WIFI_CONNECTED, LedPatternEngine, PatternId,
 };
 use drivers::pump::PumpDriver;
 use drivers::status_led::StatusLed;
@@ -72,7 +75,7 @@ use events::{Event, push_event};
 use fsm::StateId;
 use power::{PowerManager, PowerMode, WakeReason};
 use rpc::auth::MAX_CLIENTS;
-use scheduler::Scheduler;
+use scheduler::{Schedule, ScheduleKind, Scheduler};
 
 // ── Scheduler delegate ────────────────────────────────────────
 //
@@ -200,6 +203,8 @@ fn main() -> Result<()> {
     let mut rpc_sink = RpcEventSink::new();
     let mut sched = Scheduler::new();
     let mut sched_delegate = EventQueueDelegate;
+    #[cfg(target_os = "espidf")]
+    let mut _sntp: Option<esp_idf_svc::sntp::EspSntp<'static>> = None;
 
     // ── Device identity ────────────────────────────────────
     let mac = device_id::read_mac();
@@ -328,7 +333,14 @@ fn main() -> Result<()> {
         }
 
         // Tick the scheduler (delegate-driven, decoupled from events).
-        let current_hour = None; // Wire to time_adapter when NTP is synced.
+        #[cfg(target_os = "espidf")]
+        if wifi.is_connected() && _sntp.is_none() {
+            if let Ok(s) = esp_idf_svc::sntp::EspSntp::new_default() {
+                _sntp = Some(s);
+                info!("NTP: started");
+            }
+        }
+        let current_hour = time_adapter.current_hour();
         sched.tick(current_hour, tick_secs, &mut sched_delegate);
 
         // Process all pending events.
@@ -350,16 +362,19 @@ fn main() -> Result<()> {
 
                 Event::SensorReadTick => {
                     let _ = hw.read_ammonia_fast();
+                    sensors::flow::flow_clear_event_latch();
+                    activity = true;
                 }
 
                 Event::TelemetryTick => {
-                    let t = app.build_telemetry();
+                    let wifi_rssi = wifi.rssi();
+                    let t = app.build_telemetry(wifi_rssi);
                     log_sink.emit(&AppEvent::Telemetry(t.clone()));
                     rpc_sink.emit(&AppEvent::Telemetry(t));
                     let tick_ms = config.telemetry_interval_secs as u32 * 1000;
                     for cid in 0..MAX_CLIENTS as u8 {
                         if rpc_engine.should_stream_telemetry(cid, tick_ms) {
-                            if let Some(frame) = rpc_engine.build_telemetry_frame(cid, &app) {
+                            if let Some(frame) = rpc_engine.build_telemetry_frame(cid, &app, wifi_rssi) {
                                 rpc::io_task::send_response(frame.client_id, frame.data);
                             }
                         }
@@ -372,6 +387,8 @@ fn main() -> Result<()> {
                 }
 
                 Event::InterlockChanged | Event::WaterLevelChanged => {
+                    // Re-evaluate control/safety immediately after GPIO safety edges.
+                    push_event(Event::ControlTick);
                     activity = true;
                 }
 
@@ -416,8 +433,8 @@ fn main() -> Result<()> {
                 Event::ButtonLongPress => {
                     warn!("Button: long press → FACTORY RESET");
                     let _ = nvs.erase_credentials();
-                    let _ = nvs.delete("wifi_ssid");
-                    let _ = nvs.delete("wifi_pass");
+                    let _ = nvs.delete("auth", "wifi_ssid");
+                    let _ = nvs.delete("auth", "wifi_pass");
                     info!("Factory reset: credentials erased, restarting...");
                     #[cfg(target_os = "espidf")]
                     unsafe {
@@ -427,17 +444,26 @@ fn main() -> Result<()> {
                 }
 
                 Event::ButtonDoublePress => {
-                    info!("Button: double press → boost mode toggle");
+                    info!("Button: double press → manual boost (5 min)");
+                    if sched.add(Schedule {
+                        label: "manual-boost",
+                        kind: ScheduleKind::Boost { duration_secs: 300 },
+                        enabled: true,
+                    }).is_none() {
+                        warn!("Scheduler full, cannot add manual boost");
+                    }
                     activity = true;
                 }
 
                 Event::BleConnected => {
                     ble.on_central_connected();
+                    rpc::io_task::ble_set_connected(128);
                     activity = true;
                 }
 
                 Event::BleDisconnected => {
                     ble.on_central_disconnected();
+                    rpc::io_task::ble_set_disconnected();
                 }
 
                 Event::BleSsidWrite => {
@@ -469,6 +495,11 @@ fn main() -> Result<()> {
             }
         });
 
+        // Drain BLE RPC responses from io_task and send over GATT notify.
+        while let Some(resp) = rpc::io_task::try_recv_ble_response() {
+            ble.send_rpc_response(&resp);
+        }
+
         // Button gesture detection (runs outside drain_events since it uses its own atomic).
         let now_ms = (time_adapter.uptime_us() / 1000) as u32;
         if let Some(gesture) = button.tick(now_ms) {
@@ -482,6 +513,24 @@ fn main() -> Result<()> {
                 ButtonEvent::DoublePress => {
                     push_event(Event::ButtonDoublePress);
                 }
+            }
+        }
+
+        // Connectivity overlay (BLE / WiFi / OTA / low-water) — priority order.
+        {
+            use crate::adapters::ble::ProvisioningPort;
+            use crate::error::SafetyFault;
+            use crate::rpc::ota::OtaState;
+            if rpc_engine.ota_mut().state() != OtaState::Idle {
+                led_engine.set_connectivity_pattern(COLOUR_OTA, PatternId::FastBlink);
+            } else if app.fault_flags() & SafetyFault::WaterLevelLow.mask() != 0 {
+                led_engine.set_connectivity_pattern(COLOUR_LOW_WATER, PatternId::SlowPulse);
+            } else if wifi.is_connected() {
+                led_engine.set_connectivity_pattern(COLOUR_WIFI_CONNECTED, PatternId::Solid);
+            } else if ble.is_active() {
+                led_engine.set_connectivity_pattern(COLOUR_PROVISIONING, PatternId::DoubleBlink);
+            } else {
+                led_engine.clear_connectivity();
             }
         }
 

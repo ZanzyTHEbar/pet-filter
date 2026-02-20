@@ -1,3 +1,5 @@
+#![allow(dead_code)] // Error types reserved for future SensorPort/ActuatorPort typed returns
+
 //! Unified error types for the PetFilter firmware.
 //!
 //! Follows embedded best practice: a single `Error` enum that every subsystem
@@ -13,7 +15,6 @@ use core::fmt;
 
 /// Every fallible operation in the firmware funnels into this type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum Error {
     /// A sensor could not be read or returned out-of-range data.
     Sensor(SensorError),
@@ -47,7 +48,6 @@ impl fmt::Display for Error {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum SensorError {
     /// ADC read returned an error or timed out.
     AdcReadFailed,
@@ -81,7 +81,6 @@ impl From<SensorError> for Error {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum ActuatorError {
     /// PWM duty-cycle write failed.
     PwmWriteFailed,
@@ -160,7 +159,6 @@ impl From<SafetyFault> for Error {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum CommsError {
     WifiConnectFailed,
     WifiDisconnected,
@@ -192,5 +190,4 @@ impl From<CommsError> for Error {
 // ---------------------------------------------------------------------------
 
 /// Firmware-wide `Result` alias.
-#[allow(dead_code)]
 pub type Result<T> = core::result::Result<T, Error>;

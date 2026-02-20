@@ -256,7 +256,8 @@ impl OtaManager {
         #[cfg(target_os = "espidf")]
         {
             if let Some(ref mut update) = self.ota_update {
-                update.write(data).map_err(|e| {
+                let pending = pending_len as usize;
+                update.write(&self.staging_buf[..pending]).map_err(|e| {
                     warn!("esp-ota deferred write failed: {:?}", e);
                     self.abort();
                     OtaError::WriteFailed
@@ -294,7 +295,7 @@ impl OtaManager {
     #[cfg(target_os = "espidf")]
     pub fn reboot(&self) -> ! {
         info!("OTA: rebooting into new firmware");
-        esp_ota::restart();
+        unsafe { esp_idf_svc::sys::esp_restart() };
     }
 
     #[cfg(not(target_os = "espidf"))]
@@ -317,10 +318,8 @@ impl Default for OtaManager {
 /// after three consecutive failed boots.
 #[cfg(target_os = "espidf")]
 pub fn check_rollback() {
-    match esp_ota::mark_app_valid() {
-        Ok(()) => info!("OTA: firmware marked valid (rollback cancelled)"),
-        Err(e) => warn!("OTA: mark_app_valid failed: {:?}", e),
-    }
+    esp_ota::mark_app_valid();
+    info!("OTA: firmware marked valid (rollback cancelled)");
 }
 
 #[cfg(not(target_os = "espidf"))]

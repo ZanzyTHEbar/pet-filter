@@ -28,7 +28,6 @@ pub fn set_interlock_from_isr(closed: bool) {
 }
 
 /// Aggregates all sensor drivers and produces a unified snapshot.
-#[allow(dead_code)]
 pub struct SensorHub {
     pub ammonia: AmmoniaSensor,
     pub flow: FlowSensor,
@@ -57,6 +56,11 @@ impl SensorHub {
             interlock_closed: false,
             interlock_gpio,
         }
+    }
+
+    /// GPIO pin number for the UVC interlock (for diagnostics or ISR registration).
+    pub fn interlock_gpio(&self) -> i32 {
+        self.interlock_gpio
     }
 
     /// Read every sensor and return a unified snapshot.

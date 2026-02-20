@@ -6,6 +6,8 @@
 
 #[cfg(target_os = "espidf")]
 use esp_idf_svc::sys::*;
+#[cfg(target_os = "espidf")]
+use crate::pins;
 
 // ── Error type ────────────────────────────────────────────────
 
@@ -317,7 +319,9 @@ use crate::sensors::flow::flow_isr_handler;
 
 #[cfg(target_os = "espidf")]
 unsafe extern "C" fn flow_gpio_isr(_arg: *mut core::ffi::c_void) {
-    flow_isr_handler();
+    if flow_isr_handler() {
+        push_event(Event::SensorReadTick);
+    }
 }
 
 #[cfg(target_os = "espidf")]

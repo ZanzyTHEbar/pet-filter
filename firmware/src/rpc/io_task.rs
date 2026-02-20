@@ -32,11 +32,14 @@ use super::channels::{
 };
 use super::codec::FrameDecoder;
 
+use crate::events::{push_event, Event};
 use core::cell::RefCell;
 use core::time::Duration;
 use heapless::Vec;
 use log::{info, warn};
+use std::collections::VecDeque;
 use std::rc::Rc;
+use std::sync::{Mutex, OnceLock};
 
 const READ_BUF_SIZE: usize = 1024;
 
@@ -45,6 +48,61 @@ pub const BLE_SLOT: ClientId = 0;
 
 /// TCP clients start from slot 1.
 pub const TCP_SLOT_START: usize = 1;
+
+const BLE_DEFAULT_MTU: usize = 128;
+const BLE_OUTBOX_CAP: usize = 16;
+
+fn ble_transport() -> &'static Mutex<crate::adapters::ble_transport::BleTransport> {
+    static BLE_TRANSPORT: OnceLock<Mutex<crate::adapters::ble_transport::BleTransport>> =
+        OnceLock::new();
+    BLE_TRANSPORT.get_or_init(|| Mutex::new(crate::adapters::ble_transport::BleTransport::new()))
+}
+
+fn ble_slot() -> &'static Mutex<IoSlot> {
+    static BLE_SLOT_STATE: OnceLock<Mutex<IoSlot>> = OnceLock::new();
+    BLE_SLOT_STATE.get_or_init(|| Mutex::new(IoSlot::new()))
+}
+
+fn ble_outbox() -> &'static Mutex<VecDeque<Vec<u8, 512>>> {
+    static BLE_OUTBOX: OnceLock<Mutex<VecDeque<Vec<u8, 512>>>> = OnceLock::new();
+    BLE_OUTBOX.get_or_init(|| Mutex::new(VecDeque::new()))
+}
+
+fn queue_ble_response(data: Vec<u8, 512>) {
+    let Ok(mut q) = ble_outbox().lock() else {
+        warn!("IO[BLE]: outbox lock poisoned");
+        return;
+    };
+    if q.len() >= BLE_OUTBOX_CAP {
+        warn!("IO[BLE]: outbox full, dropping response");
+        return;
+    }
+    q.push_back(data);
+}
+
+pub fn try_recv_ble_response() -> Option<Vec<u8, 512>> {
+    ble_outbox().lock().ok()?.pop_front()
+}
+
+pub fn ble_set_connected(mtu: usize) {
+    let Ok(mut bt) = ble_transport().lock() else {
+        warn!("IO[BLE]: transport lock poisoned");
+        return;
+    };
+    bt.connect(BLE_SLOT, mtu.max(BLE_DEFAULT_MTU));
+    if let Ok(mut slot) = ble_slot().lock() {
+        slot.reset();
+    }
+}
+
+pub fn ble_set_disconnected() {
+    if let Ok(mut bt) = ble_transport().lock() {
+        bt.disconnect();
+    }
+    if let Ok(mut slot) = ble_slot().lock() {
+        slot.reset();
+    }
+}
 
 // ── Per-client decoder state ─────────────────────────────────
 
@@ -76,6 +134,9 @@ fn feed_slot_bytes(slot: &mut IoSlot, client_id: ClientId, data: &[u8]) {
         let msg = CommandMsg { client_id, frame };
         if CMD_CHANNEL.try_send(msg).is_err() {
             warn!("IO[{}]: command channel full, dropping frame", client_id);
+        } else {
+            // Wake main loop immediately to dispatch inbound RPC command.
+            push_event(Event::CommandReceived);
         }
     }
 }
@@ -222,19 +283,40 @@ pub fn spawn(
 /// which runs in the BT task context — NOT on the I/O thread.
 /// Since `CMD_CHANNEL` is `Send`, cross-thread send is safe.
 pub fn feed_ble_bytes(data: &[u8]) {
-    let mut decoder = FrameDecoder::new();
-    if let Some(frame_bytes) = decoder.feed(data) {
-        let mut frame = Vec::new();
-        if frame.extend_from_slice(frame_bytes).is_ok() {
-            let msg = CommandMsg {
-                client_id: BLE_SLOT,
-                frame,
-            };
-            if CMD_CHANNEL.try_send(msg).is_err() {
-                warn!("IO[BLE]: command channel full, dropping frame");
-            }
-        }
+    use crate::rpc::transport::Transport as _;
+
+    let Ok(mut bt) = ble_transport().lock() else {
+        warn!("IO[BLE]: transport lock poisoned");
+        return;
+    };
+
+    if !bt.is_connected() {
+        bt.connect(BLE_SLOT, BLE_DEFAULT_MTU);
     }
+
+    if let Err(e) = bt.on_gatt_write(data) {
+        warn!("IO[BLE]: invalid fragment: {}", e);
+        return;
+    }
+
+    let mut buf = [0u8; READ_BUF_SIZE];
+    let n = match bt.read(&mut buf) {
+        Ok(n) => n,
+        Err(e) => {
+            warn!("IO[BLE]: read failed: {}", e);
+            return;
+        }
+    };
+
+    if n == 0 {
+        return;
+    }
+
+    let Ok(mut slot) = ble_slot().lock() else {
+        warn!("IO[BLE]: slot lock poisoned");
+        return;
+    };
+    feed_slot_bytes(&mut slot, BLE_SLOT, &buf[..n]);
 }
 
 // ── Channel accessors for the control loop ───────────────────
@@ -244,6 +326,11 @@ pub fn feed_ble_bytes(data: &[u8]) {
 /// When the control loop calls this, the I/O task's write future
 /// wakes instantly via `RESP_CHANNEL.receive().await` — no polling delay.
 pub fn send_response(client_id: ClientId, data: Vec<u8, 512>) {
+    if client_id == BLE_SLOT {
+        queue_ble_response(data);
+        return;
+    }
+
     let msg = ResponseMsg { client_id, data };
     if RESP_CHANNEL.try_send(msg).is_err() {
         warn!("RPC: response channel full for client {}", client_id);
@@ -276,5 +363,41 @@ mod tests {
     fn feed_slot_bytes_no_panic_on_partial() {
         let mut slot = IoSlot::new();
         feed_slot_bytes(&mut slot, 1, &[0x04, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn ble_response_uses_ble_outbox() {
+        let mut data = Vec::<u8, 512>::new();
+        data.extend_from_slice(&[0x01, 0x02, 0x03]).unwrap();
+        send_response(BLE_SLOT, data);
+        let popped = try_recv_ble_response().expect("ble outbox empty");
+        assert_eq!(&popped[..], &[0x01, 0x02, 0x03]);
+    }
+
+    #[test]
+    fn feed_ble_bytes_accepts_single_fragment_frame() {
+        // Ensure no stale commands from prior tests.
+        while try_recv_command().is_some() {}
+
+        ble_set_connected(128);
+
+        let payload = [0xAAu8, 0xBB, 0xCC];
+        let mut frame = [0u8; 32];
+        let n = crate::rpc::codec::encode_frame(&payload, &mut frame).expect("encode frame");
+        let frame = &frame[..n];
+
+        // BLE fragment header: [seq, flags], flags=FRAG_FIRST for single fragment.
+        let mut frag = [0u8; 64];
+        frag[0] = 0;
+        frag[1] = 0x02;
+        frag[2..2 + frame.len()].copy_from_slice(frame);
+
+        feed_ble_bytes(&frag[..2 + frame.len()]);
+
+        let cmd = try_recv_command().expect("missing BLE command");
+        assert_eq!(cmd.client_id, BLE_SLOT);
+        assert_eq!(&cmd.frame[..], &payload);
+
+        ble_set_disconnected();
     }
 }

@@ -45,6 +45,7 @@ pub struct PatternRequest {
 }
 
 /// LED pattern engine. Stack-allocated, no heap.
+#[derive(Default)]
 pub struct LedPatternEngine {
     phase_ms: u32,
     active: Option<PatternRequest>,
@@ -55,13 +56,7 @@ pub struct LedPatternEngine {
 
 impl LedPatternEngine {
     pub fn new() -> Self {
-        Self {
-            phase_ms: 0,
-            active: None,
-            fsm_request: None,
-            connectivity_request: None,
-            error_request: None,
-        }
+        Self::default()
     }
 
     /// Set the FSM-layer pattern (priority 2).
@@ -80,6 +75,11 @@ impl LedPatternEngine {
             pattern,
             priority: 3,
         });
+    }
+
+    /// Clear only the connectivity-layer pattern (e.g. when no BLE/WiFi/OTA/water state to show).
+    pub fn clear_connectivity(&mut self) {
+        self.connectivity_request = None;
     }
 
     /// Set or clear the error pattern (priority 1 — highest).
@@ -197,6 +197,7 @@ pub const COLOUR_PROVISIONING: Rgb = (128, 0, 255); // Purple
 pub const COLOUR_WIFI_CONNECTING: Rgb = (0, 100, 255); // Blue
 pub const COLOUR_WIFI_CONNECTED: Rgb = (0, 255, 50); // Green
 pub const COLOUR_LOW_WATER: Rgb = (255, 200, 0); // Yellow
+pub const COLOUR_OTA: Rgb = (255, 140, 0); // Orange
 
 #[cfg(test)]
 mod tests {

@@ -10,13 +10,14 @@
 
 use crate::drivers::hw_init;
 
+#[derive(Default)]
 pub struct StatusLed {
     current: (u8, u8, u8),
 }
 
 impl StatusLed {
     pub fn new() -> Self {
-        Self { current: (0, 0, 0) }
+        Self::default()
     }
 
     pub fn set_colour(&mut self, r: u8, g: u8, b: u8) {

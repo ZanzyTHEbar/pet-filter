@@ -39,4 +39,6 @@ pub struct TelemetryData {
     pub pump_duty: u8,
     pub uvc_duty: u8,
     pub fault_flags: u8,
+    /// WiFi signal strength in dBm; None when not connected (e.g. BLE-only).
+    pub wifi_rssi: Option<i8>,
 }

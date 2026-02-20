@@ -4,9 +4,10 @@
 //! backpressure (dropping frames if the transport can't keep up).
 
 /// Stream subscription state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StreamState {
     /// Not subscribed — no frames sent.
+    #[default]
     Inactive,
     /// Actively streaming at the configured interval.
     Active { interval_ms: u32 },
@@ -16,6 +17,7 @@ pub enum StreamState {
 
 /// Manages streaming telemetry to a connected client.
 /// Manages streaming telemetry subscriptions.
+#[derive(Default)]
 pub struct StreamManager {
     state: StreamState,
     elapsed_ms: u32,
@@ -25,11 +27,7 @@ pub struct StreamManager {
 
 impl StreamManager {
     pub fn new() -> Self {
-        Self {
-            state: StreamState::Inactive,
-            elapsed_ms: 0,
-            dropped_count: 0,
-        }
+        Self::default()
     }
 
     /// Subscribe to telemetry streaming.

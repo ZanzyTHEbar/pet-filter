@@ -8,6 +8,8 @@
 
 #[cfg(target_os = "espidf")]
 use esp_idf_svc::sys::*;
+#[cfg(target_os = "espidf")]
+use crate::events::{push_event, Event};
 
 #[cfg(target_os = "espidf")]
 use log::info;

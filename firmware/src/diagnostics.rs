@@ -36,13 +36,14 @@ impl CrashEntry {
 }
 
 /// NVS-backed ring buffer for crash entries.
+#[derive(Default)]
 pub struct CrashLog {
     write_index: usize,
 }
 
 impl CrashLog {
     pub fn new() -> Self {
-        Self { write_index: 0 }
+        Self::default()
     }
 
     /// Load the write index from NVS, or default to 0.

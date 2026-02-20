@@ -8,8 +8,14 @@
 //! On ESP-IDF: reads real GPIO levels via hw_init helpers.
 //! On host/test: defaults to water-present (safe default).
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::AtomicBool;
+#[cfg(not(target_os = "espidf"))]
+use core::sync::atomic::Ordering;
 
+#[cfg(target_os = "espidf")]
+use crate::drivers::hw_init;
+#[cfg(target_os = "espidf")]
+use crate::pins;
 static SIM_WATER_A: AtomicBool = AtomicBool::new(true);
 static SIM_WATER_B: AtomicBool = AtomicBool::new(true);
 

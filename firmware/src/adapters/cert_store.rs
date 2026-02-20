@@ -129,18 +129,18 @@ impl CertStore {
         };
 
         let mut buf = [0u8; MAX_CERT_SIZE];
-        if let Ok(Some(len)) = nvs.get_blob("server_cert", &mut buf) {
-            let _ = bundle.server_cert.extend_from_slice(&buf[..len]);
+        if let Ok(Some(data)) = nvs.get_blob("server_cert", &mut buf) {
+            let _ = bundle.server_cert.extend_from_slice(data);
         }
 
         let mut buf = [0u8; MAX_KEY_SIZE];
-        if let Ok(Some(len)) = nvs.get_blob("server_key", &mut buf) {
-            let _ = bundle.server_key.extend_from_slice(&buf[..len]);
+        if let Ok(Some(data)) = nvs.get_blob("server_key", &mut buf) {
+            let _ = bundle.server_key.extend_from_slice(data);
         }
 
         let mut buf = [0u8; MAX_CERT_SIZE];
-        if let Ok(Some(len)) = nvs.get_blob("ca_cert", &mut buf) {
-            let _ = bundle.ca_cert.extend_from_slice(&buf[..len]);
+        if let Ok(Some(data)) = nvs.get_blob("ca_cert", &mut buf) {
+            let _ = bundle.ca_cert.extend_from_slice(data);
         }
 
         Some(bundle)

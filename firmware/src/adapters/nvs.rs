@@ -12,7 +12,7 @@
 
 use crate::app::ports::{ConfigError, ConfigPort, StorageError, StoragePort};
 use crate::config::SystemConfig;
-use log::info;
+use log::{info, warn};
 
 #[cfg(not(target_os = "espidf"))]
 use std::collections::HashMap;
@@ -21,12 +21,10 @@ use std::collections::HashMap;
 use esp_idf_svc::sys::*;
 
 #[cfg(target_os = "espidf")]
-use core::ffi::CStr;
 
 const CONFIG_NAMESPACE: &str = "petfilter";
 const CONFIG_KEY: &str = "syscfg";
 
-#[allow(dead_code)]
 const MAX_BLOB_SIZE: usize = 4000;
 const CRED_NAMESPACE: &str = "auth";
 
@@ -328,6 +326,9 @@ impl StoragePort for NvsAdapter {
     fn write(&mut self, namespace: &str, key: &str, data: &[u8]) -> Result<(), StorageError> {
         #[cfg(not(target_os = "espidf"))]
         {
+            if data.len() > MAX_BLOB_SIZE {
+                return Err(StorageError::IoError);
+            }
             let composite = Self::composite_key(namespace, key);
             self.store.borrow_mut().insert(composite, data.to_vec());
             Ok(())

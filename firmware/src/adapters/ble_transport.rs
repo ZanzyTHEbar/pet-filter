@@ -307,10 +307,7 @@ impl Transport for BleTransport {
     }
 }
 
-// We need Vec for the chunks iterator in std-only contexts
-#[cfg(target_os = "espidf")]
-use alloc::vec::Vec;
-#[cfg(not(target_os = "espidf"))]
+// We need Vec for chunk collection
 use std::vec::Vec;
 
 // ── Tests ────────────────────────────────────────────────────

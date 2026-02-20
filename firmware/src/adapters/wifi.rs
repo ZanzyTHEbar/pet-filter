@@ -179,6 +179,12 @@ pub struct WifiAdapter {
     last_rssi: Option<i8>,
 }
 
+impl Default for WifiAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WifiAdapter {
     pub fn new() -> Self {
         Self {
@@ -206,7 +212,7 @@ impl WifiAdapter {
         unsafe {
             // Configure STA mode with the stored SSID + password.
             let mut wifi_cfg: wifi_config_t = core::mem::zeroed();
-            let sta = &mut wifi_cfg.__bindgen_anon_1.sta;
+            let sta = &mut wifi_cfg.sta;
 
             let ssid_bytes = self.ssid.as_bytes();
             let pw_bytes = self.password.as_bytes();

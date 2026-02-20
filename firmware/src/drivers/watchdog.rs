@@ -16,6 +16,12 @@ pub struct Watchdog {
     subscribed: bool,
 }
 
+impl Default for Watchdog {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Watchdog {
     /// Initialise and subscribe the current task to the TWDT.
     pub fn new() -> Self {

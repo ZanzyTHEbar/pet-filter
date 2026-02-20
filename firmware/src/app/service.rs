@@ -192,7 +192,8 @@ impl AppService {
     // ── Queries ───────────────────────────────────────────────
 
     /// Build a telemetry snapshot from the current context.
-    pub fn build_telemetry(&self) -> TelemetryData {
+    /// `wifi_rssi`: WiFi signal strength in dBm when connected; None when not available (e.g. BLE-only).
+    pub fn build_telemetry(&self, wifi_rssi: Option<i8>) -> TelemetryData {
         TelemetryData {
             state: self.fsm.current_state(),
             nh3_ppm: self.ctx.sensors.nh3_ppm,
@@ -204,6 +205,7 @@ impl AppService {
             pump_duty: self.ctx.commands.pump_duty,
             uvc_duty: self.ctx.commands.uvc_duty,
             fault_flags: self.ctx.fault_flags,
+            wifi_rssi,
         }
     }
 
@@ -314,3 +316,20 @@ impl AppService {
         self.config_dirty
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::SystemConfig;
+
+    #[test]
+    fn build_telemetry_wifi_rssi_propagates() {
+        let config = SystemConfig::default();
+        let app = AppService::new(config);
+        let t_none = app.build_telemetry(None);
+        assert!(t_none.wifi_rssi.is_none());
+        let t_some = app.build_telemetry(Some(-42));
+        assert_eq!(t_some.wifi_rssi, Some(-42));
+    }
+}
+

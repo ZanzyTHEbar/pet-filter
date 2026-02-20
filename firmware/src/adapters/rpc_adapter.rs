@@ -21,6 +21,12 @@ pub struct RpcEventSink {
     msg_id: u32,
 }
 
+impl Default for RpcEventSink {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RpcEventSink {
     pub fn new() -> Self {
         Self {

@@ -102,21 +102,19 @@ impl Default for UlpSharedState {
 
 // SAFETY: These extern statics are located in RTC slow memory (shared with
 // the ULP coprocessor). All accesses in this module occur only after calling
-// stop_ulp_monitor() — which sets ulp_stop_flag and waits for the ULP to
+// stop_ulp_monitor() — which sets ulp_ulp_stop_flag and waits for the ULP to
 // halt — ensuring the main CPU holds exclusive access to the shared region.
 // The ULP never writes to threshold/confirm fields; the main CPU never writes
 // to last_reading/above_count/cycle_count while the ULP is running.
 #[cfg(target_os = "espidf")]
-extern "C" {
+unsafe extern "C" {
     static mut ulp_main: u32;
-    static _binary_ulp_nh3_monitor_bin_start: u8;
-    static _binary_ulp_nh3_monitor_bin_end: u8;
-    static mut ulp_nh3_threshold_adc: u32;
-    static mut ulp_nh3_last_reading: u32;
-    static mut ulp_nh3_above_count: u32;
-    static mut ulp_nh3_confirm_count: u32;
-    static mut ulp_cycle_count: u32;
-    static mut ulp_stop_flag: u32;
+    static mut ulp_ulp_nh3_threshold_adc: u32;
+    static mut ulp_ulp_nh3_last_reading: u32;
+    static mut ulp_ulp_nh3_above_count: u32;
+    static mut ulp_ulp_nh3_confirm_count: u32;
+    static mut ulp_ulp_cycle_count: u32;
+    static mut ulp_ulp_stop_flag: u32;
 }
 
 // ── ULP variable accessors (ESP-IDF only) ────────────────────
@@ -129,21 +127,21 @@ extern "C" {
 /// SAFETY: Called only after stop_ulp_monitor(); ULP is halted.
 #[cfg(target_os = "espidf")]
 unsafe fn ulp_read_nh3_last() -> u32 {
-    unsafe { ulp_nh3_last_reading }
+    unsafe { ulp_ulp_nh3_last_reading }
 }
 
 /// Read the consecutive above-threshold count from the ULP.
 /// SAFETY: Same as `ulp_read_nh3_last()`.
 #[cfg(target_os = "espidf")]
 unsafe fn ulp_read_above_count() -> u32 {
-    unsafe { ulp_nh3_above_count }
+    unsafe { ulp_ulp_nh3_above_count }
 }
 
 /// Read the ULP cycle counter.
 /// SAFETY: Same as `ulp_read_nh3_last()`.
 #[cfg(target_os = "espidf")]
 unsafe fn ulp_read_cycle_count() -> u32 {
-    unsafe { ulp_cycle_count }
+    unsafe { ulp_ulp_cycle_count }
 }
 
 /// Write the NH3 ADC threshold that triggers a ULP wake.
@@ -151,7 +149,7 @@ unsafe fn ulp_read_cycle_count() -> u32 {
 #[cfg(target_os = "espidf")]
 unsafe fn ulp_write_threshold(val: u32) {
     unsafe {
-        ulp_nh3_threshold_adc = val;
+        ulp_ulp_nh3_threshold_adc = val;
     }
 }
 
@@ -160,7 +158,7 @@ unsafe fn ulp_write_threshold(val: u32) {
 #[cfg(target_os = "espidf")]
 unsafe fn ulp_write_confirm_count(val: u32) {
     unsafe {
-        ulp_nh3_confirm_count = val;
+        ulp_ulp_nh3_confirm_count = val;
     }
 }
 
@@ -169,7 +167,7 @@ unsafe fn ulp_write_confirm_count(val: u32) {
 #[cfg(target_os = "espidf")]
 unsafe fn ulp_write_stop_flag(val: u32) {
     unsafe {
-        ulp_stop_flag = val;
+        ulp_ulp_stop_flag = val;
     }
 }
 
@@ -261,31 +259,17 @@ impl PowerManager {
 
     // ── ULP program loading ───────────────────────────────────
 
-    /// Load the ULP RISC-V binary into RTC slow memory from the
-    /// linker-embedded blob. Call once during startup.
+    /// Mark the ULP monitor as available.
+    ///
+    /// The ULP component is built and linked by ESP-IDF during firmware build,
+    /// so runtime only tracks the loaded state here.
     #[cfg(target_os = "espidf")]
     pub fn load_ulp_program(&mut self) -> Result<(), PowerError> {
         if self.ulp_loaded {
             return Ok(());
         }
 
-        info!("Loading ULP NH3 monitor program into RTC memory");
-
-        // SAFETY: _binary_ulp_nh3_monitor_bin_start/_end are linker symbols
-        // pointing to the embedded ULP binary; size derived from pointer
-        // arithmetic is valid while the elf section exists.
-        unsafe {
-            let bin_start = &_binary_ulp_nh3_monitor_bin_start as *const u8;
-            let bin_end = &_binary_ulp_nh3_monitor_bin_end as *const u8;
-            let size = bin_end.offset_from(bin_start) as usize;
-
-            let rc = esp_idf_sys::ulp_riscv_load_binary(bin_start, size);
-            if rc != esp_idf_sys::ESP_OK as i32 {
-                warn!("ULP binary load failed: rc={}", rc);
-                return Err(PowerError::UlpLoadFailed(rc));
-            }
-        }
-
+        info!("ULP NH3 monitor linked and ready");
         self.ulp_loaded = true;
         Ok(())
     }
@@ -439,6 +423,7 @@ impl PowerManager {
     /// ULP NH3 monitor before sleeping. This function does **not**
     /// return — the CPU resets on wake.
     #[cfg(target_os = "espidf")]
+    #[allow(unreachable_code)]
     pub fn enter_deep_sleep(&mut self, nh3_threshold_adc: u32) -> ! {
         info!("Entering deep sleep with ULP NH3 monitor");
         self.mode = PowerMode::DeepSleep;
@@ -451,7 +436,6 @@ impl PowerManager {
             esp_idf_sys::esp_deep_sleep_start();
         }
 
-        unreachable!("esp_deep_sleep_start does not return");
     }
 
     /// Enter deep sleep mode with ULP monitoring.

@@ -16,13 +16,15 @@ use log::warn;
 use crate::drivers::hw_init;
 use crate::pins;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UvcState {
+    #[default]
     Off,
     On { duty: u8 },
     Faulted(&'static str),
 }
 
+#[derive(Default)]
 pub struct UvcDriver {
     state: UvcState,
     hw_duty: u8,
@@ -30,10 +32,7 @@ pub struct UvcDriver {
 
 impl UvcDriver {
     pub fn new() -> Self {
-        Self {
-            state: UvcState::Off,
-            hw_duty: 0,
-        }
+        Self::default()
     }
 
     pub fn enable(&mut self, duty: u8) {

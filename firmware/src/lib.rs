@@ -18,6 +18,7 @@ pub mod scheduler;
 
 mod error;
 mod pins;
+mod esp_link_shims;
 
 // Re-export the ESPidf-only modules so the crate compiles; the actual
 // implementations are guarded by cfg attributes inside.

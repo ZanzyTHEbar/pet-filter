@@ -21,7 +21,7 @@
 
 use super::utils::is_printable_ascii;
 use core::fmt;
-use log::{info, warn};
+use log::{error, info, warn};
 
 // ───────────────────────────────────────────────────────────────
 // Constants
@@ -34,6 +34,8 @@ pub const CHAR_WIFI_TRIGGER: u128 = 0x4a650004_b7e4_4b91_a032_5f6c9a1d7e3a;
 pub const CHAR_STATUS: u128 = 0x4a650010_b7e4_4b91_a032_5f6c9a1d7e3a;
 pub const CHAR_CONFIG: u128 = 0x4a650020_b7e4_4b91_a032_5f6c9a1d7e3a;
 pub const CHAR_PSK_PAIRING: u128 = 0x4a650030_b7e4_4b91_a032_5f6c9a1d7e3a;
+pub const CHAR_RPC_WRITE: u128 = crate::adapters::ble_transport::CHAR_RPC_WRITE;
+pub const CHAR_RPC_NOTIFY: u128 = crate::adapters::ble_transport::CHAR_RPC_NOTIFY;
 
 const MAX_STATUS_BYTES: usize = 64;
 const MAX_SSID_LEN: usize = 32;
@@ -160,6 +162,10 @@ static BLE_PASS_CHAR_HANDLE: AtomicU32 = AtomicU32::new(0);
 #[cfg(target_os = "espidf")]
 static BLE_PSK_CHAR_HANDLE: AtomicU32 = AtomicU32::new(0);
 #[cfg(target_os = "espidf")]
+static BLE_RPC_WRITE_CHAR_HANDLE: AtomicU32 = AtomicU32::new(0);
+#[cfg(target_os = "espidf")]
+static BLE_RPC_NOTIFY_CHAR_HANDLE: AtomicU32 = AtomicU32::new(0);
+#[cfg(target_os = "espidf")]
 static BLE_SVC_HANDLE: AtomicU32 = AtomicU32::new(0);
 #[cfg(target_os = "espidf")]
 static BLE_CHAR_STEP: AtomicU32 = AtomicU32::new(0);
@@ -180,9 +186,7 @@ static BLE_PSK_BUF: std::sync::Mutex<heapless::Vec<u8, 32>> =
 fn uuid128_to_esp(uuid: u128) -> esp_idf_svc::sys::esp_bt_uuid_t {
     let mut t: esp_idf_svc::sys::esp_bt_uuid_t = unsafe { core::mem::zeroed() };
     t.len = 16;
-    unsafe {
-        t.uuid.uuid128 = uuid.to_le_bytes();
-    }
+    t.uuid.uuid128 = uuid.to_le_bytes();
     t
 }
 
@@ -301,7 +305,7 @@ unsafe extern "C" fn ble_gatts_event_handler(
                 },
                 is_primary: true,
             };
-            esp_ble_gatts_create_service(gatts_if, &mut svc_id, 12);
+            esp_ble_gatts_create_service(gatts_if, &mut svc_id, 16);
         }
         esp_gatts_cb_event_t_ESP_GATTS_CREATE_EVT => {
             let p = &(*param).create;
@@ -358,9 +362,31 @@ unsafe extern "C" fn ble_gatts_event_handler(
                 }
                 4 => {
                     BLE_STATUS_CHAR_HANDLE.store(handle as u32, AtomicOrdering::Relaxed);
+                    log::info!("BLE GATTS: status char (handle={})", handle);
                     BLE_CHAR_STEP.store(5, AtomicOrdering::Relaxed);
+                    add_gatt_char(
+                        svc_handle,
+                        CHAR_RPC_WRITE,
+                        ESP_GATT_PERM_WRITE,
+                        ESP_GATT_CHAR_PROP_BIT_WRITE,
+                    );
+                }
+                5 => {
+                    BLE_RPC_WRITE_CHAR_HANDLE.store(handle as u32, AtomicOrdering::Relaxed);
+                    log::info!("BLE GATTS: rpc-write char (handle={})", handle);
+                    BLE_CHAR_STEP.store(6, AtomicOrdering::Relaxed);
+                    add_gatt_char(
+                        svc_handle,
+                        CHAR_RPC_NOTIFY,
+                        ESP_GATT_PERM_READ,
+                        ESP_GATT_CHAR_PROP_BIT_NOTIFY,
+                    );
+                }
+                6 => {
+                    BLE_RPC_NOTIFY_CHAR_HANDLE.store(handle as u32, AtomicOrdering::Relaxed);
+                    BLE_CHAR_STEP.store(7, AtomicOrdering::Relaxed);
                     log::info!(
-                        "BLE GATTS: status char (handle={}) — all registered",
+                        "BLE GATTS: rpc-notify char (handle={}) — all registered",
                         handle
                     );
                 }
@@ -412,6 +438,8 @@ unsafe extern "C" fn ble_gatts_event_handler(
                     let _ = buf.extend_from_slice(data);
                 }
                 crate::events::push_event(crate::events::Event::BlePskWrite);
+            } else if handle == BLE_RPC_WRITE_CHAR_HANDLE.load(AtomicOrdering::Relaxed) {
+                crate::rpc::io_task::feed_ble_bytes(data);
             }
         }
         _ => {}
@@ -552,6 +580,11 @@ impl BleAdapter {
         }
     }
 
+    /// Send RPC response bytes over the BLE notify characteristic.
+    pub fn send_rpc_response(&mut self, payload: &[u8]) {
+        self.platform_send_rpc_notify(payload);
+    }
+
     // ── Platform-specific ─────────────────────────────────────
 
     #[cfg(target_os = "espidf")]
@@ -599,20 +632,20 @@ impl BleAdapter {
             esp_ble_gatts_app_register(0);
 
             // Configure BLE security: just-works pairing with bonding.
-            let auth_req = esp_ble_auth_req_t_ESP_LE_AUTH_REQ_SC_BOND;
-            let iocap = esp_ble_io_cap_t_ESP_IO_CAP_NONE;
+            let auth_req: esp_ble_auth_req_t = ESP_LE_AUTH_REQ_SC_BOND as u8;
+            let iocap: esp_ble_io_cap_t = ESP_IO_CAP_NONE as u8;
             let key_size: u8 = 16;
             let init_key: u8 = (ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK) as u8;
             let rsp_key: u8 = (ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK) as u8;
             esp_ble_gap_set_security_param(
                 esp_ble_sm_param_t_ESP_BLE_SM_AUTHEN_REQ_MODE,
                 &auth_req as *const _ as *mut _,
-                core::mem::size_of_val(&auth_req) as u32,
+                core::mem::size_of_val(&auth_req) as u8,
             );
             esp_ble_gap_set_security_param(
                 esp_ble_sm_param_t_ESP_BLE_SM_IOCAP_MODE,
                 &iocap as *const _ as *mut _,
-                core::mem::size_of_val(&iocap) as u32,
+                core::mem::size_of_val(&iocap) as u8,
             );
             esp_ble_gap_set_security_param(
                 esp_ble_sm_param_t_ESP_BLE_SM_MAX_KEY_SIZE,
@@ -677,6 +710,30 @@ impl BleAdapter {
     #[cfg(not(target_os = "espidf"))]
     fn platform_stop(&mut self) {
         info!("BLE(sim): stopped");
+    }
+
+    #[cfg(target_os = "espidf")]
+    fn platform_send_rpc_notify(&mut self, payload: &[u8]) {
+        use esp_idf_svc::sys::*;
+        unsafe {
+            let handle = BLE_RPC_NOTIFY_CHAR_HANDLE.load(core::sync::atomic::Ordering::Relaxed);
+            let conn = BLE_CONN_ID.load(core::sync::atomic::Ordering::Relaxed);
+            if handle != 0 && conn != 0 {
+                let _ = esp_ble_gatts_send_indicate(
+                    BLE_GATTS_IF.load(core::sync::atomic::Ordering::Relaxed) as u8,
+                    conn as u16,
+                    handle as u16,
+                    payload.len() as u16,
+                    payload.as_ptr() as *mut u8,
+                    false,
+                );
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "espidf"))]
+    fn platform_send_rpc_notify(&mut self, payload: &[u8]) {
+        info!("BLE(sim): rpc notify {} bytes", payload.len());
     }
 
     #[cfg(target_os = "espidf")]

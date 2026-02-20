@@ -87,6 +87,8 @@ pub(super) struct EspTlsClient {
     pub(super) ssl: Box<mbedtls_ssl_context>,
 }
 
+unsafe impl Send for EspTlsClient {}
+
 impl Drop for EspTlsClient {
     fn drop(&mut self) {
         // SAFETY: `ssl` was initialised by `mbedtls_ssl_init`/`mbedtls_ssl_setup`
@@ -110,6 +112,8 @@ pub(super) struct EspTlsServer {
     entropy: Box<mbedtls_entropy_context>,
     drbg: Box<mbedtls_ctr_drbg_context>,
 }
+
+unsafe impl Send for EspTlsServer {}
 
 impl Drop for EspTlsServer {
     fn drop(&mut self) {

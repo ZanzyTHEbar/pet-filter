@@ -38,10 +38,10 @@ pub fn spawn_on_core(
     f: impl FnOnce() + Send + 'static,
 ) -> std::thread::JoinHandle<()> {
     unsafe {
-        let mut cfg = esp_idf_sys::esp_create_default_pthread_config();
+        let mut cfg = esp_idf_sys::esp_pthread_get_default_config();
         cfg.pin_to_core = core as i32;
-        cfg.prio = priority as i32;
-        cfg.stack_size = (stack_kb * 1024) as i32;
+        cfg.prio = priority as usize;
+        cfg.stack_size = stack_kb * 1024;
         cfg.thread_name = name.as_ptr() as *const _;
         let ret = esp_idf_sys::esp_pthread_set_cfg(&cfg);
         assert!(

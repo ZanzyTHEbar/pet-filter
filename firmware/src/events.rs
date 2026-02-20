@@ -20,8 +20,6 @@
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
-#[cfg(target_os = "espidf")]
-use core::sync::atomic::AtomicPtr;
 
 /// Maximum number of pending events.
 /// Power of 2 for efficient ring buffer modulo.
@@ -108,8 +106,6 @@ static mut EVENT_BUFFER: [u8; EVENT_QUEUE_CAP] = [0; EVENT_QUEUE_CAP];
 // the main control loop, which blocks in `wait_for_event()`. This
 // eliminates busy-polling and lets the idle task invoke PM hooks.
 
-#[cfg(target_os = "espidf")]
-static MAIN_TASK_HANDLE: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(core::ptr::null_mut());
 
 /// Register the calling task as the main event consumer.
 ///
@@ -117,14 +113,7 @@ static MAIN_TASK_HANDLE: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(core::ptr
 /// to wake the registered task from `wait_for_event()`. Must be called
 /// exactly once from the main control task before entering the event loop.
 #[cfg(target_os = "espidf")]
-pub fn register_main_task() {
-    let handle = unsafe { esp_idf_sys::xTaskGetCurrentTaskHandle() };
-    MAIN_TASK_HANDLE.store(handle as *mut _, Ordering::Release);
-    log::info!(
-        "events: main task registered for notification wake (handle={:?})",
-        handle
-    );
-}
+pub fn register_main_task() {}
 
 /// No-op on non-ESP targets.
 #[cfg(not(target_os = "espidf"))]
@@ -138,9 +127,7 @@ pub fn register_main_task() {}
 /// WiFi reconnection) still runs even without events.
 #[cfg(target_os = "espidf")]
 pub fn wait_for_event(timeout_ms: u32) {
-    unsafe {
-        esp_idf_sys::ulTaskNotifyTake(1, timeout_ms);
-    }
+    std::thread::sleep(std::time::Duration::from_millis(timeout_ms as u64));
 }
 
 /// Simulation fallback: sleep for the timeout duration.
@@ -193,16 +180,6 @@ pub fn push_event(event: Event) -> bool {
 
     EVENT_HEAD.store(next_head, Ordering::Release);
 
-    // Wake the main task from wait_for_event() if it's blocked.
-    #[cfg(target_os = "espidf")]
-    {
-        let handle = MAIN_TASK_HANDLE.load(Ordering::Acquire);
-        if !handle.is_null() {
-            unsafe {
-                esp_idf_sys::xTaskNotifyGive(handle as _);
-            }
-        }
-    }
 
     true
 }

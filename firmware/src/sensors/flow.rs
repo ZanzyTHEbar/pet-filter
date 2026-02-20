@@ -8,7 +8,7 @@
 //! different priorities), the counter uses `AtomicU32` for lock-free
 //! thread safety — the correct pattern for shared ISR state on ESP32.
 
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// Calibration: pulses per litre for YF-S201.
 /// Datasheet: frequency (Hz) = 7.5 × flow_rate (L/min)
@@ -18,12 +18,20 @@ const PULSES_PER_LITRE: f32 = 450.0;
 /// Global atomic counter incremented by the GPIO ISR.
 /// `static` because ISR callbacks in ESP-IDF cannot capture closures.
 static FLOW_PULSE_COUNT: AtomicU32 = AtomicU32::new(0);
+static FLOW_EVENT_LATCH: AtomicBool = AtomicBool::new(false);
 
 /// Called from the GPIO ISR on each rising edge.
 /// Must be `extern "C"` and `#[no_mangle]` compatible when registered
 /// via `esp_idf_hal::gpio::PinDriver::set_interrupt`.
-pub fn flow_isr_handler() {
+pub fn flow_isr_handler() -> bool {
     FLOW_PULSE_COUNT.fetch_add(1, Ordering::Relaxed);
+    // Only request one queued wake until main loop drains the pulse bucket.
+    !FLOW_EVENT_LATCH.swap(true, Ordering::AcqRel)
+}
+
+/// Clear the flow wake latch after the main loop consumes pending pulses.
+pub fn flow_clear_event_latch() {
+    FLOW_EVENT_LATCH.store(false, Ordering::Release);
 }
 
 /// Result of a flow measurement.

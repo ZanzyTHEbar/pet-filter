@@ -22,12 +22,14 @@ pub enum Direction {
     Reverse,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PumpState {
+    #[default]
     Stopped,
     Running { duty: u8, dir: Direction },
 }
 
+#[derive(Default)]
 pub struct PumpDriver {
     state: PumpState,
     hw_duty: u8,
@@ -35,10 +37,7 @@ pub struct PumpDriver {
 
 impl PumpDriver {
     pub fn new() -> Self {
-        Self {
-            state: PumpState::Stopped,
-            hw_duty: 0,
-        }
+        Self::default()
     }
 
     pub fn set(&mut self, duty: u8, direction: Direction) {

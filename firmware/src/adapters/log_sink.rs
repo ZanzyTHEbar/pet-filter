@@ -10,6 +10,7 @@ use crate::app::events::AppEvent;
 use crate::app::ports::EventSink;
 
 /// Adapter that logs every [`AppEvent`] to the serial console.
+#[derive(Default)]
 pub struct LogEventSink;
 
 impl LogEventSink {
