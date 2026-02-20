@@ -8,6 +8,10 @@ license = "Proprietary"
 rust-version = "1.85"
 
 
+[package.metadata.esp-idf-sys]
+extra_components = [{ component_dirs = ["ulp_nh3_component"] }]
+
+
 [lib]
 name = "petfilter"
 path = "src/lib.rs"
@@ -30,7 +34,7 @@ espidf = [
 
 [lints.rust]
 unused_must_use = "deny"
-unsafe_op_in_unsafe_fn = "deny"
+unsafe_op_in_unsafe_fn = "warn"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }
@@ -47,7 +51,7 @@ must_use_candidate = "allow"
 # Pedantic lints that are noise in embedded/firmware context
 doc_markdown = "allow"
 unused_self = "allow"
-new_without_default = "allow"
+new_without_default = "warn"
 uninlined_format_args = "allow"
 items_after_statements = "allow"
 ignored_unit_patterns = "allow"

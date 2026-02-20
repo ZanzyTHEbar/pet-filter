@@ -113,6 +113,8 @@ table TelemetryFrame {
     pump_duty: ubyte;
     uvc_duty: ubyte;
     fault_flags: ubyte;
+    /// WiFi RSSI in dBm; 127 = not available (e.g. BLE-only).
+    wifi_rssi: byte = 127;
 }
 
 table StateChangeEvent {
@@ -187,6 +189,8 @@ table CertStatusResponse {
 table OtaBeginRequest {
     firmware_size: uint;
     sha256: [ubyte];
+    /// Monotonic firmware version for anti-rollback checks.
+    version: uint = 0;
 }
 
 table OtaChunkRequest {

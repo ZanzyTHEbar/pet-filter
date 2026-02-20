@@ -6,3 +6,7 @@ runner = "espflash flash --monitor"
 MCU = "esp32s3"
 ESP_IDF_VERSION = "v5.2"
 ESP_IDF_TOOLS_INSTALL_DIR = "global"
+
+[unstable]
+build-std = ["std", "panic_abort"]
+

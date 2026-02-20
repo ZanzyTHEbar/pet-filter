@@ -26,3 +26,6 @@ docs/branding/
 docs/research/
 !docs/research/odor-chemistry.md
 !docs/research/technology-validation.md
+# Wokwi exported host artifacts
+firmware/.wokwi-host/
+firmware/artifacts/wokwi/

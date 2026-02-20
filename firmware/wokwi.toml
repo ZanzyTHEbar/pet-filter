@@ -4,8 +4,8 @@
 version = 1
 # Firmware binary produced by `cargo build --release`
 # Use `espflash save-image` or `idf.py uf2` to generate
-firmware = "target/xtensa-esp32s3-espidf/release/petfilter"
-elf = "target/xtensa-esp32s3-espidf/release/petfilter"
+firmware = ".wokwi-host/petfilter"
+elf = ".wokwi-host/petfilter.elf"
 
 # GDB debugging support
 # gdbServerPort = 3333
