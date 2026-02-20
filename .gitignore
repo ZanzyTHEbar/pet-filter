@@ -1,4 +1,5 @@
 .cursor/
+.vscode/
 # KiCad outputs (generated, not tracked)
 hardware/pcb/output/
 
@@ -18,3 +19,10 @@ __pycache__/
 # Rust
 target/
 ulp/build/
+*.proptest-regressions
+
+docs/business/
+docs/branding/
+docs/research/
+!docs/research/odor-chemistry.md
+!docs/research/technology-validation.md
