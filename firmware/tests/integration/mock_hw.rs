@@ -23,6 +23,7 @@ pub struct MockHardware {
     pub calls: Vec<ActuatorCall>,
 }
 
+#[allow(dead_code)]
 impl MockHardware {
     pub fn new() -> Self {
         Self { calls: Vec::new() }
@@ -33,19 +34,27 @@ impl MockHardware {
     }
 
     pub fn pump_on(&self) -> bool {
-        self.calls.iter().rev().find_map(|c| match c {
-            ActuatorCall::SetPump { duty, .. } => Some(*duty > 0),
-            ActuatorCall::AllOff => Some(false),
-            _ => None,
-        }).unwrap_or(false)
+        self.calls
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                ActuatorCall::SetPump { duty, .. } => Some(*duty > 0),
+                ActuatorCall::AllOff => Some(false),
+                _ => None,
+            })
+            .unwrap_or(false)
     }
 
     pub fn uvc_on(&self) -> bool {
-        self.calls.iter().rev().find_map(|c| match c {
-            ActuatorCall::EnableUvc { duty } => Some(*duty > 0),
-            ActuatorCall::AllOff => Some(false),
-            _ => None,
-        }).unwrap_or(false)
+        self.calls
+            .iter()
+            .rev()
+            .find_map(|c| match c {
+                ActuatorCall::EnableUvc { duty } => Some(*duty > 0),
+                ActuatorCall::AllOff => Some(false),
+                _ => None,
+            })
+            .unwrap_or(false)
     }
 }
 
@@ -61,7 +70,10 @@ impl ActuatorPort for MockHardware {
     }
 
     fn stop_pump(&mut self) {
-        self.calls.push(ActuatorCall::SetPump { duty: 0, forward: true });
+        self.calls.push(ActuatorCall::SetPump {
+            duty: 0,
+            forward: true,
+        });
     }
 
     fn enable_uvc(&mut self, duty: u8) {
@@ -120,7 +132,9 @@ pub struct MockNvs {
 
 impl MockNvs {
     pub fn new() -> Self {
-        Self { store: HashMap::new() }
+        Self {
+            store: HashMap::new(),
+        }
     }
 }
 
@@ -131,7 +145,12 @@ impl Default for MockNvs {
 }
 
 impl StoragePort for MockNvs {
-    fn read(&self, namespace: &str, key: &str, buf: &mut [u8]) -> Result<usize, petfilter::app::ports::StorageError> {
+    fn read(
+        &self,
+        namespace: &str,
+        key: &str,
+        buf: &mut [u8],
+    ) -> Result<usize, petfilter::app::ports::StorageError> {
         let k = format!("{}::{}", namespace, key);
         match self.store.get(&k) {
             Some(v) => {
@@ -143,7 +162,12 @@ impl StoragePort for MockNvs {
         }
     }
 
-    fn write(&mut self, namespace: &str, key: &str, data: &[u8]) -> Result<(), petfilter::app::ports::StorageError> {
+    fn write(
+        &mut self,
+        namespace: &str,
+        key: &str,
+        data: &[u8],
+    ) -> Result<(), petfilter::app::ports::StorageError> {
         let k = format!("{}::{}", namespace, key);
         self.store.insert(k, data.to_vec());
         Ok(())
@@ -153,7 +177,11 @@ impl StoragePort for MockNvs {
         self.store.contains_key(&format!("{}::{}", namespace, key))
     }
 
-    fn delete(&mut self, namespace: &str, key: &str) -> Result<(), petfilter::app::ports::StorageError> {
+    fn delete(
+        &mut self,
+        namespace: &str,
+        key: &str,
+    ) -> Result<(), petfilter::app::ports::StorageError> {
         self.store.remove(&format!("{}::{}", namespace, key));
         Ok(())
     }

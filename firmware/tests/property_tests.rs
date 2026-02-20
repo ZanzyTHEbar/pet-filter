@@ -5,9 +5,9 @@
 
 #![cfg(not(target_os = "espidf"))]
 
-use proptest::prelude::*;
-use petfilter::rpc::auth::Session;
+use petfilter::rpc::auth::{Session, compute_hmac};
 use petfilter::rpc::ota::{OtaError, OtaManager, OtaState};
+use proptest::prelude::*;
 
 // ── QA-8b: PSK auth round-trip ────────────────────────────────
 
@@ -21,14 +21,10 @@ proptest! {
         let mut session = Session::new();
         let (session_id, nonce) = session.begin_challenge();
 
-        // Compute the expected HMAC using the same sim algorithm (XOR).
-        let mut expected = [0u8; 32];
-        for i in 0..32 {
-            expected[i] = psk[i % psk.len()] ^ nonce[i];
-        }
+        let tag = compute_hmac(&psk, &nonce);
 
         prop_assert!(
-            session.verify_response(session_id, &expected, &psk),
+            session.verify_response(session_id, &tag, &psk),
             "correct HMAC must always authenticate"
         );
     }
@@ -61,8 +57,8 @@ proptest! {
 
 #[derive(Debug, Clone)]
 enum OtaOp {
-    Begin(u32),            // firmware_size
-    Chunk(u32, Vec<u8>),   // offset, data
+    Begin(u32),          // firmware_size
+    Chunk(u32, Vec<u8>), // offset, data
     Finalize,
     Abort,
 }
@@ -70,7 +66,10 @@ enum OtaOp {
 fn arb_ota_op() -> impl Strategy<Value = OtaOp> {
     prop_oneof![
         (1u32..=1024u32).prop_map(OtaOp::Begin),
-        (0u32..=512u32, proptest::collection::vec(0u8..=255u8, 1..=16))
+        (
+            0u32..=512u32,
+            proptest::collection::vec(0u8..=255u8, 1..=16)
+        )
             .prop_map(|(o, d)| OtaOp::Chunk(o, d)),
         Just(OtaOp::Finalize),
         Just(OtaOp::Abort),
@@ -137,24 +136,32 @@ proptest! {
 // through the diagnostics module directly.
 #[test]
 fn crash_log_count_bounded_by_capacity() {
-    use std::collections::HashMap;
     use petfilter::app::ports::{StorageError, StoragePort};
     use petfilter::diagnostics::{CrashEntry, CrashLog};
+    use std::collections::HashMap;
 
     struct MemStore(HashMap<String, Vec<u8>>);
     impl StoragePort for MemStore {
         fn read(&self, ns: &str, k: &str, buf: &mut [u8]) -> Result<usize, StorageError> {
             match self.0.get(&format!("{}::{}", ns, k)) {
-                Some(v) => { let n = v.len().min(buf.len()); buf[..n].copy_from_slice(&v[..n]); Ok(n) }
+                Some(v) => {
+                    let n = v.len().min(buf.len());
+                    buf[..n].copy_from_slice(&v[..n]);
+                    Ok(n)
+                }
                 None => Err(StorageError::NotFound),
             }
         }
         fn write(&mut self, ns: &str, k: &str, d: &[u8]) -> Result<(), StorageError> {
-            self.0.insert(format!("{}::{}", ns, k), d.to_vec()); Ok(())
+            self.0.insert(format!("{}::{}", ns, k), d.to_vec());
+            Ok(())
         }
-        fn exists(&self, ns: &str, k: &str) -> bool { self.0.contains_key(&format!("{}::{}", ns, k)) }
+        fn exists(&self, ns: &str, k: &str) -> bool {
+            self.0.contains_key(&format!("{}::{}", ns, k))
+        }
         fn delete(&mut self, ns: &str, k: &str) -> Result<(), StorageError> {
-            self.0.remove(&format!("{}::{}", ns, k)); Ok(())
+            self.0.remove(&format!("{}::{}", ns, k));
+            Ok(())
         }
     }
 
@@ -173,8 +180,5 @@ fn crash_log_count_bounded_by_capacity() {
         "CrashLog must hold at most 4 entries (ring buffer), got {}",
         entries.len()
     );
-    assert!(
-        log.count(&nvs) <= 4,
-        "count() must not exceed capacity"
-    );
+    assert!(log.count(&nvs) <= 4, "count() must not exceed capacity");
 }

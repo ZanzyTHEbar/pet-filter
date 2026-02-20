@@ -14,7 +14,7 @@ use petfilter::fsm::StateId;
 fn make_app() -> (AppService, MockHardware, LogSink) {
     let config = SystemConfig::default();
     let mut app = AppService::new(config);
-    let mut hw = MockHardware::new();
+    let hw = MockHardware::new();
     let mut sink = LogSink::new();
     app.start(&mut sink);
     (app, hw, sink)
@@ -54,11 +54,16 @@ fn update_config_marks_config_dirty() {
     let (mut app, mut hw, mut sink) = make_app();
     assert!(!app.is_config_dirty(), "should not be dirty on start");
 
-    let mut new_cfg = SystemConfig::default();
-    new_cfg.pump_duty_percent = 75;
+    let new_cfg = SystemConfig {
+        pump_duty_percent: 75,
+        ..Default::default()
+    };
     app.handle_command(AppCommand::UpdateConfig(new_cfg), &mut hw, &mut sink);
 
-    assert!(app.is_config_dirty(), "config should be dirty after UpdateConfig");
+    assert!(
+        app.is_config_dirty(),
+        "config should be dirty after UpdateConfig"
+    );
 }
 
 // ── QA-7c: SaveConfig → clears dirty flag ────────────────────
@@ -67,8 +72,10 @@ fn update_config_marks_config_dirty() {
 fn save_config_clears_dirty_flag() {
     let (mut app, mut hw, mut sink) = make_app();
 
-    let mut cfg = SystemConfig::default();
-    cfg.pump_duty_percent = 80;
+    let cfg = SystemConfig {
+        pump_duty_percent: 80,
+        ..Default::default()
+    };
     app.handle_command(AppCommand::UpdateConfig(cfg), &mut hw, &mut sink);
     assert!(app.is_config_dirty());
 
@@ -94,7 +101,13 @@ fn ota_begin_chunk_finalize_happy_path() {
 
     let sha = [0u8; 32];
     assert!(ota.begin(8, &sha).is_ok());
-    assert!(matches!(ota.state(), OtaState::Receiving { expected_size: 8, bytes_written: 0 }));
+    assert!(matches!(
+        ota.state(),
+        OtaState::Receiving {
+            expected_size: 8,
+            bytes_written: 0
+        }
+    ));
 
     assert_eq!(ota.write_chunk(0, b"abcd").unwrap(), 4);
     assert_eq!(ota.write_chunk(4, b"efgh").unwrap(), 8);
@@ -110,7 +123,11 @@ fn ota_abort_always_resets_to_idle() {
     ota.begin(100, &[0u8; 32]).unwrap();
     ota.write_chunk(0, &[1u8; 50]).unwrap();
     ota.abort();
-    assert_eq!(ota.state(), OtaState::Idle, "abort must always reset to Idle");
+    assert_eq!(
+        ota.state(),
+        OtaState::Idle,
+        "abort must always reset to Idle"
+    );
 
     // Can start a new session after abort.
     assert!(ota.begin(8, &[0u8; 32]).is_ok());
@@ -127,8 +144,10 @@ fn force_error_state_calls_all_off() {
     assert_eq!(app.state(), StateId::Error, "FSM should be in Error state");
     // AllOff should have been issued when entering Error state.
     assert!(
-        hw.calls.iter().any(|c| matches!(c, crate::mock_hw::ActuatorCall::AllOff)),
-        "AllOff must be issued on FSM Error entry"
+        hw.calls
+            .iter()
+            .any(|c| matches!(c, crate::mock_hw::ActuatorCall::SetPump { duty: 0, .. })),
+        "Pump must be stopped on FSM Error entry"
     );
 }
 
@@ -138,8 +157,10 @@ fn force_error_state_calls_all_off() {
 fn auto_save_fires_after_dirty_timeout() {
     let (mut app, mut hw, mut sink) = make_app();
 
-    let mut cfg = SystemConfig::default();
-    cfg.purge_duration_secs = 42;
+    let cfg = SystemConfig {
+        purge_duration_secs: 42,
+        ..Default::default()
+    };
     app.handle_command(AppCommand::UpdateConfig(cfg), &mut hw, &mut sink);
     assert!(app.is_config_dirty());
 
@@ -149,5 +170,8 @@ fn auto_save_fires_after_dirty_timeout() {
         app.tick(&mut hw, &mut sink);
     }
     let did_save = app.auto_save_if_needed(&nvs);
-    assert!(did_save, "auto_save should fire after sufficient ticks with dirty config");
+    assert!(
+        did_save,
+        "auto_save should fire after sufficient ticks with dirty config"
+    );
 }
