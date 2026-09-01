@@ -1,5 +1,13 @@
 # PetFilter Firmware — Definitive Work Breakdown
 
+> **STATUS (2026-09-01): Historical planning document.** All P0-1…P2-8 tasks
+> in this breakdown are verified implemented on `main` (RPC over TLS 1.3/BLE,
+> auth, OTA+rollback, crash log, watchdog, BLE provisioning, WiFi, mDNS,
+> ULP sleep monitor; no `todo!`/`unimplemented!` markers in source; closure
+> evidence in issues #2/#4/#5). Keep for design rationale and task acceptance
+> criteria — **do not use as a status source.** Live tracker: GitHub issues
+> #1–#23 under the Gate 1/2/3 milestones.
+>
 > Generated from the Purbright legacy carry-forward matrix, filtered through
 > the architecture constraint: **federated encrypted comms only, no webUI,
 > no captive portal, no REST endpoints, no public endpoints outside RPC**.

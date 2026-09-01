@@ -1,7 +1,6 @@
 # PetFilter
 
-<!-- CI badge: update OWNER/REPO after first push -->
-![Firmware CI](https://github.com/OWNER/pet-filter/actions/workflows/firmware.yml/badge.svg)
+![Firmware CI](https://github.com/ZanzyTHEbar/pet-filter/actions/workflows/firmware.yml/badge.svg)
 
 **A compact, intelligent air scrubber that uses venturi-based water-air contact to dissolve and destroy pet odor compounds.**
 
@@ -33,14 +32,18 @@ pet-filter/
 │   └── branding/         # Brand identity, ICA, go-to-market, pricing
 ├── firmware/             # ESP32-S3 firmware (Rust via esp-rs)
 │   └── src/
-│       ├── sensors/      # Gas, flow, water level, temperature
-│       ├── control/      # State machine, PID, safety interlocks
-│       └── comms/        # WiFi, BLE, MQTT
+│       ├── sensors/      # NH3 (MQ-137), flow, water level, temperature
+│       ├── control/      # PID control
+│       ├── fsm/          # State machine (Idle→Sensing→Active→Purging→Error)
+│       ├── app/          # Core application service (host-testable)
+│       ├── adapters/     # WiFi, BLE, NVS, TLS, mDNS, cert store
+│       ├── rpc/          # FlatBuffers RPC over TLS 1.3 / BLE (no REST/MQTT)
+│       └── drivers/      # Pump, UVC, LED, button, watchdog, timers
 ├── hardware/
 │   ├── pcb/              # KiCad project files
 │   ├── cad/              # Housing CAD files
 │   └── datasheets/       # Component datasheets
-└── tools/                # Build scripts, test utilities
+└── tools/                # KiCad symbol/schematic generators (Python)
 ```
 
 ## Technical Specs (Target)
@@ -59,16 +62,22 @@ pet-filter/
 
 ### Firmware (Rust)
 
+Requires the `esp` rust toolchain (xtensa) and stable for host tests. [`just`](https://github.com/casey/just) wraps all commands — see `firmware/justfile`:
+
 ```bash
-# Prerequisites: Rust toolchain + esp-rs
 cd firmware
-cargo build --release
-espflash flash target/xtensa-esp32s3-espidf/release/petfilter
+just build     # ESP32-S3 cross-build (xtensa-esp32s3-espidf)
+just test      # host test suite (x86_64, no-default-features)
+just lint      # clippy -D warnings
+just ci        # fmt + lint + test + audit
+just flash     # espflash to device
 ```
+
+Work is tracked on GitHub: issues #1–#23 under Gate 1/2/3 milestones (`Gate 1: POC-Ready Firmware`, `Gate 2: Prototype Greenlight`, `Gate 3: Pre-Production`).
 
 ### PCB (KiCad 8)
 
-Open `hardware/pcb/petfilter.kicad_pro` in KiCad 8.
+Open `hardware/pcb/petfilter.kicad_pro` in KiCad 8. ERC/DRC/BOM/gerbers via KiBot in Docker — see `hardware/pcb/Makefile` (`make validate`, `make gerbers`).
 
 ## License
 
